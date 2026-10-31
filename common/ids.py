@@ -15,5 +15,5 @@ def hash_id(raw_id: str, salt: str, chars: int) -> str:
 
 def hash_device(raw_id: str) -> str:
     """hash_id with the salt and length from config."""
-    privacy = get_config()["privacy"]
-    return hash_id(raw_id, privacy["salt"], privacy["hash_chars"])
+    privacy = get_config().privacy
+    return hash_id(raw_id, privacy.salt, privacy.hash_chars)

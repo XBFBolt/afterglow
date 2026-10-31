@@ -6,15 +6,21 @@ sim: true                # fake hardware everywhere; set false on the Pi
 bus:
   host: 127.0.0.1
   settle_s: 0.3          # pause after a publisher connects so early messages aren't dropped
-  retry_s: 2             # proxy retry delay if its ports are busy
+  hwm: 1000              # max messages queued per socket; beyond this the newest are dropped
   # The node and the command post each run their own bus. Separate ports let
   # both run on one laptop in sim mode.
   node: {pub_port: 5550, sub_port: 5551}
   post: {pub_port: 5560, sub_port: 5561}
 
+service:                 # crashed modules restart after backoff_min_s,
+  backoff_min_s: 1       # doubling each time up to backoff_max_s
+  backoff_max_s: 30
+
 log:
   level: INFO
   dir: logs              # bus recordings, relative to the repo root
+  fsync_s: 1             # force recordings to disk this often
+  min_free_mb: 500       # pause recording below this much free disk
 
 privacy:
   salt: afterglow-2026   # salt for device-ID hashes (common/ids.py)

@@ -96,8 +96,43 @@ def test_unknown_topic_is_rejected() -> None:
             RadarHit,
             {"present": True, "moving": False, "range_m": 1, "conf": 0.5, "extra": 1},
         ),
+        (
+            RadarHit,
+            {"present": True, "moving": False, "range_m": float("nan"), "conf": 0.5},
+        ),
+        (
+            BleHit,
+            {
+                "dev": "AA:BB:CC:DD:EE:FF",
+                "rssi_dbm": -60,
+                "rssi_smooth": -60,
+                "est_range_m": 1,
+            },
+        ),
+        (
+            BleHit,
+            {
+                "dev": "2efae4bfcede",
+                "rssi_dbm": float("inf"),
+                "rssi_smooth": -60,
+                "est_range_m": 1,
+            },
+        ),
     ],
 )
 def test_bad_values_are_rejected(model: type[Message], fields: dict) -> None:
     with pytest.raises(ValidationError):
         model(**fields)
+
+
+def test_messages_cannot_be_changed_after_validation() -> None:
+    msg = SAMPLES["confirm.thermal"]
+    with pytest.raises(ValidationError):
+        msg.conf = 5.0  # type: ignore[misc]
+
+
+def test_unknown_values_default_to_none_not_zero() -> None:
+    target = Target(id=1, confidence=0.6, priority=3, alive=False)
+    assert target.hazard is None and target.breaths_per_min is None
+    alert = Alert(id=1, p=3, c=60, alive=False)
+    assert alert.br is None and alert.hz is None

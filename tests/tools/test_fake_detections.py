@@ -35,7 +35,7 @@ def test_victim_phone_gets_warmer(events: list[tuple[str, Message]]) -> None:
 
 
 def test_victim_phone_is_a_configured_target() -> None:
-    assert hash_device(fake.VICTIM_MAC) in get_config()["targets"]["devices"]
+    assert hash_device(fake.VICTIM_MAC) in get_config().targets.devices
 
 
 def test_heat_then_breathing(events: list[tuple[str, Message]]) -> None:

@@ -64,8 +64,8 @@ def _ticks(period_s: float, start_s: float = 0.0) -> Iterator[float]:
 
 
 def _rssi(range_m: float, rng: random.Random) -> float:
-    rf = get_config()["rf"]
-    clean = rf["p1m_dbm"] - 10 * rf["path_loss_n"] * math.log10(range_m)
+    rf = get_config().rf
+    clean = rf.p1m_dbm - 10 * rf.path_loss_n * math.log10(range_m)
     return clean + rng.gauss(0, RSSI_NOISE_DB)
 
 
@@ -95,7 +95,7 @@ def _ble(rng: random.Random) -> Iterator[tuple[str, Message]]:
 
 def _wifi(rng: random.Random) -> Iterator[tuple[str, Message]]:
     dev = hash_device(VICTIM_MAC)
-    channels = get_config()["wifi"]["channels"]
+    channels = get_config().wifi.channels
     for t, rssi, smooth, est in _rf_stream(searcher_range_m, WIFI_BURST_PERIOD_S, rng):
         for i, channel in enumerate(channels):
             yield (

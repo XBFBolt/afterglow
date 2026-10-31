@@ -3,7 +3,9 @@ nothing else opens ZeroMQ sockets.
 
 A proxy process sits in the middle (python -m common.bus): publishers connect
 to its pub port and subscribers to its sub port, so modules can start, crash
-and restart in any order. The node and the command post each run their own bus.
+and restart in any order and reconnect on their own. The node and the command
+post each run their own bus. Everything binds to localhost only, and every
+socket queue is capped at bus.hwm messages.
 """
 
 import argparse
@@ -15,6 +17,7 @@ import zmq
 
 from common.config import get_config, setup_logging
 from common.schema import TOPICS, Message, model_for, parse
+from common.service import run_forever
 
 log = logging.getLogger(__name__)
 
@@ -23,12 +26,13 @@ BUSES = ("node", "post")
 
 def bus_ports(bus: str) -> tuple[int, int]:
     """(pub_port, sub_port) of the named bus."""
-    ports = get_config()["bus"][bus]
-    return ports["pub_port"], ports["sub_port"]
+    cfg = get_config().bus
+    ports = {"node": cfg.node, "post": cfg.post}[bus]
+    return ports.pub_port, ports.sub_port
 
 
 def _endpoint(port: int) -> str:
-    return f"tcp://{get_config()['bus']['host']}:{port}"
+    return f"tcp://{get_config().bus.host}:{port}"
 
 
 class Publisher:
@@ -38,9 +42,10 @@ class Publisher:
         self.src = src
         self._sock = zmq.Context.instance().socket(zmq.PUB)
         self._sock.setsockopt(zmq.LINGER, 1000)
+        self._sock.setsockopt(zmq.SNDHWM, get_config().bus.hwm)
         self._sock.connect(_endpoint(bus_ports(bus)[0]))
         # ZeroMQ drops anything published before the connection is up.
-        time.sleep(get_config()["bus"]["settle_s"])
+        time.sleep(get_config().bus.settle_s)
 
     def publish(self, topic: str, msg: Message) -> None:
         if model_for(topic) is not type(msg):
@@ -71,6 +76,7 @@ class Subscriber:
                 raise ValueError(f"no topic matches {prefix!r}")
         self._sock = zmq.Context.instance().socket(zmq.SUB)
         self._sock.setsockopt(zmq.LINGER, 0)
+        self._sock.setsockopt(zmq.RCVHWM, get_config().bus.hwm)
         self._sock.connect(_endpoint(bus_ports(bus)[1]))
         for prefix in topics:
             self._sock.setsockopt_string(zmq.SUBSCRIBE, prefix)
@@ -109,8 +115,11 @@ def run_proxy(bus: str = "node", ctx: zmq.Context | None = None) -> None:
     context is terminated."""
     ctx = ctx or zmq.Context.instance()
     pub_port, sub_port = bus_ports(bus)
+    hwm = get_config().bus.hwm
     xsub = ctx.socket(zmq.XSUB)
     xpub = ctx.socket(zmq.XPUB)
+    xsub.setsockopt(zmq.RCVHWM, hwm)
+    xpub.setsockopt(zmq.SNDHWM, hwm)
     try:
         xsub.bind(_endpoint(pub_port))
         xpub.bind(_endpoint(sub_port))
@@ -128,16 +137,7 @@ def main() -> None:
     parser.add_argument("--bus", choices=BUSES, default="node")
     args = parser.parse_args()
     setup_logging()
-    retry_s = get_config()["bus"]["retry_s"]
-    while True:
-        try:
-            run_proxy(args.bus)
-            return
-        except zmq.ZMQError as exc:
-            log.error(
-                "%s bus proxy failed: %s; retrying in %s s", args.bus, exc, retry_s
-            )
-            time.sleep(retry_s)
+    run_forever(f"{args.bus} bus proxy", lambda: run_proxy(args.bus))
 
 
 if __name__ == "__main__":

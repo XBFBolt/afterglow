@@ -1,5 +1,6 @@
 from common.config import get_config
 from common.ids import hash_device, hash_id
+from common.schema import BleHit
 
 
 def test_hash_is_truncated_hex() -> None:
@@ -19,6 +20,15 @@ def test_salt_changes_the_hash() -> None:
 
 
 def test_hash_device_uses_config() -> None:
-    privacy = get_config()["privacy"]
+    privacy = get_config().privacy
     mac = "02:00:00:00:00:01"
-    assert hash_device(mac) == hash_id(mac, privacy["salt"], privacy["hash_chars"])
+    assert hash_device(mac) == hash_id(mac, privacy.salt, privacy.hash_chars)
+
+
+def test_hash_is_accepted_by_the_schema() -> None:
+    BleHit(
+        dev=hash_device("AA:BB:CC:DD:EE:FF"),
+        rssi_dbm=-60,
+        rssi_smooth=-60,
+        est_range_m=1,
+    )

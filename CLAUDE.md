@@ -14,6 +14,18 @@ There is no GPS, cell or Wi-Fi infrastructure in the scenario. All sensing and s
 
 We are judged on a **working live demo** and **deployability**. Reliability beats features. Every change should keep the end-to-end demo working.
 
+## Engineering standard
+
+Build close to military grade. Assume a tired operator, flaky hardware and a link that drops. The system must still never crash, never go quiet without saying so, and never report something it doesn't know. In practice:
+
+- **Validate at the edges.** The whole config is checked when a process starts (`common/config.py`), so a typo stops it at launch, not mid-search. Every message is checked when it is built and when it is received (`common/schema.py`): no NaN, no out-of-range values, no unknown fields. A bad message is logged and dropped, never passed on.
+- **Unknown is not zero.** A value nobody measured (no breathing rate yet, no recent gas reading) is `None`, never a default that looks like a real reading.
+- **Nothing takes the node down.** Long-running modules run their loop under `common.service.run_forever`, which logs any crash with its traceback and restarts with back-off. Hardware and serial errors are caught where they happen.
+- **Everything is bounded.** Queues, buffers, retries, back-off and disk use have limits set in `config.yaml`, so a long search can't exhaust memory or storage.
+- **Privacy by construction.** Message and config schemas accept only hashed device IDs, so a raw MAC can't be published or configured, even by mistake.
+- **Test the failures, not just the demo.** Bad input, a restarted bus, a crashed module, a dropped link and a dead sensor each get a test.
+- **Measure every claim.** Latency, range, battery life and false-positive numbers come from tests we ran.
+
 ## Architecture in one paragraph
 
 Each module is its own small Python process. Sensor modules publish typed JSON messages to a local ZeroMQ pub/sub bus. The fusion module subscribes to sensor topics, groups hits into target tracks, computes a confidence score and triage priority, and publishes targets. The relay module turns targets into compact alerts, queues them by priority, and sends them over LoRa with store-and-forward. At the command post, a receiver decodes alerts and feeds the TAK output and the web map. Every bus message is logged to `.jsonl` so runs can be replayed.
@@ -22,7 +34,7 @@ Each module is its own small Python process. Sensor modules publish typed JSON m
 
 ```
 common/        bus.py (pub/sub helper + proxy), schema.py (all message models), config.py, config.yaml,
-               ids.py (device-ID hashing), recorder.py (bus → logs/*.jsonl)
+               ids.py (device-ID hashing), recorder.py (bus → logs/*.jsonl), service.py (crash restart)
 find/          wifi_sniffer.py, ble_scanner.py, rssi_filter.py
 confirm/       thermal.py, person_detect.py, radar.py
 hazard/        arduino/gas_sensor.ino, gas_reader.py
@@ -66,7 +78,7 @@ Key fields (see `schema.py` for the full definitions):
 - `RadarHit`: `present`, `moving`, `range_m`, `breaths_per_min | None`, `conf`
 - `HazardReading`: `hazard` ("none" | "caution" | "danger"), `gas_raw`, `temp_c`
 - `Target`: `id`, `confidence`, `priority` (1–4), `alive`, `bearing_deg`, `range_m`, `breaths_per_min`, `hazard`, `x`, `y` (meters from the start point, if known), `evidence` (per-sensor e values)
-- `Alert`: compact keys `v, id, p, c, x, y, brg, rng, alive, br, hz, t`; must encode to under 100 bytes
+- `Alert`: compact keys `v, id, p, c, x, y, brg, rng, alive, br, hz, t`; must encode to under 100 bytes; unknown values (`br`, `hz`, position) are `None` and left off the air, never sent as 0
 
 Bus usage: always go through `common/bus.py` (`Publisher(src)`, `Subscriber(topics)`). Do not open raw ZeroMQ sockets in modules. The proxy runs as its own process and binds local ports defined in `config.yaml`. `Publisher` stamps its `src` on any message that leaves `src` empty. The node and the command post each run their own bus on separate ports (`bus="post"` in code, `--bus post` on the command line), so both can run on one laptop in sim mode.
 
@@ -126,7 +138,7 @@ Run modules as packages (`python -m find.ble_scanner`), not as loose scripts.
 - Small modules, plain functions, few classes. Prefer clarity over cleverness; a teammate should follow it at 3 a.m.
 - Use `asyncio` only where a library requires it (`bleak`, `pytak`). Plain loops elsewhere.
 - Logging through the standard `logging` module, one logger per module. No bare `print` outside tools.
-- A module must never crash the node: catch hardware and serial errors, log them, back off and retry.
+- A module must never crash the node: catch hardware and serial errors, log them, back off and retry. Run every long-running loop under `common.service.run_forever`.
 - Pure logic (RSSI filter, fusion, triage, priority queue, codec) must be separated from I/O so it can be unit-tested without hardware.
 - Every new piece of pure logic gets a pytest test. Use the fake scenario for integration tests.
 - Keep dependencies minimal. Ask before adding a new package.

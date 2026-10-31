@@ -44,6 +44,7 @@ Fake scenario → fusion → relay queue → LoRa (sim) → receiver → web map
 - [ ] `map/web/`: Flask + Leaflet, markers colored by priority, vitals popup, hazard ring, P1-first side list, "last received" timestamp, x/y floor-plan mode
 - [ ] `map/cot_sender.py`: CoT via pytak, `uid` = `AG-<track id>`, stale after 2 min, searcher as a friendly marker
 - [ ] `tools/replay.py`: replays a `.jsonl` run through the same pipeline
+- [ ] Health: every module publishes a heartbeat; the map flags any sensor or link that has gone quiet (silence must never look like "no victim")
 - [ ] Integration test: fake scenario ends with a P1 alert received at the command post
 - [ ] Milestone: `honcho` starts node and post on one laptop and the full scenario plays out on the web map
 
@@ -55,6 +56,7 @@ Get each part talking to software standalone before wrapping it in a module.
 
 - [ ] Raspberry Pi OS Bookworm 64-bit; I2C and serial enabled in `raspi-config`, serial login console off
 - [ ] AI HAT+ detected by the Hailo runtime
+- [ ] Pi clock is right with no network (RTC battery fitted, or set from the laptop before deploying); every timestamp depends on it
 
 **RF**
 
@@ -88,7 +90,8 @@ Each behind `--sim`, sim path written first, and never able to crash the node.
 - [ ] `hazard/arduino/gas_sensor.ino`: 10-reading average, one JSON line per 500 ms
 - [ ] `hazard/gas_reader.py`: clean-air baseline, ×1.5 caution, ×2.5 danger
 - [ ] `relay/lora_tx.py` and `relay/lora_rx.py` real path via `meshtastic` with want-ack
-- [ ] Node starts every process on boot with no laptop or keyboard attached
+- [ ] systemd unit per process on the Pi: starts on boot with no laptop or keyboard, restarts any process that dies (honcho stops everything when one process exits: fine for dev, not for the field)
+- [ ] Secret hash salt per deployment, kept out of git; the committed salt only protects sim data, and anyone holding it can brute-force a hashed MAC
 
 ## Phase 3: stretch (only once everything above is solid)
 
