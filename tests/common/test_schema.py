@@ -147,6 +147,22 @@ def test_messages_cannot_be_changed_after_validation() -> None:
     msg = SAMPLES["confirm.thermal"]
     with pytest.raises(ValidationError):
         msg.conf = 5.0  # type: ignore[misc]
+    target = SAMPLES["fuse.target"]
+    assert isinstance(target, Target)
+    with pytest.raises(ValidationError):
+        target.evidence.rf = 7.0  # type: ignore[misc]
+
+
+def test_errors_never_echo_the_rejected_value() -> None:
+    # The rejected value may be the raw MAC the schema exists to keep out of logs.
+    with pytest.raises(ValidationError) as caught:
+        BleHit(dev="aa:bb:cc:dd:ee:ff", rssi_dbm=-60, rssi_smooth=-60, est_range_m=1)
+    assert "aa:bb" not in str(caught.value)
+
+
+def test_timestamps_from_a_broken_clock_are_rejected() -> None:
+    with pytest.raises(ValidationError):
+        HazardReading(hazard="none", gas_raw=180, t=1e12)  # year ~33,700
 
 
 def test_unknown_values_default_to_none_not_zero() -> None:

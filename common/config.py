@@ -44,6 +44,7 @@ class BusConfig(Section):
     host: str
     settle_s: PositiveFloat
     hwm: int = Field(gt=0)
+    bad_msg_log_s: PositiveFloat
     node: Ports
     post: Ports
 

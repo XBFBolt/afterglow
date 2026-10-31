@@ -21,8 +21,8 @@ Build close to military grade. Assume a tired operator, flaky hardware and a lin
 - **Validate at the edges.** The whole config is checked when a process starts (`common/config.py`), so a typo stops it at launch, not mid-search. Every message is checked when it is built, published and received (`common/schema.py`): no NaN, no physically impossible values, no unknown fields. A bad message is logged and dropped, never passed on.
 - **Unknown is not zero.** A value nobody measured (no breathing rate yet, no recent gas reading, no one in front of the radar) is `None`, never a default that looks like a real reading.
 - **Nothing takes the node down.** Long-running modules run their loop under `common.service.run_forever`, which logs any crash with its traceback and restarts with back-off. Hardware and serial errors are caught where they happen.
-- **Everything is bounded.** Queues, buffers, retries, back-off and disk use have limits set in `config.yaml`, so a long search can't exhaust memory or storage.
-- **Privacy by construction.** Message and config schemas accept only hashed device IDs (16+ hex characters, longer than any MAC), so a raw MAC can't be published or configured, even by mistake.
+- **Everything is bounded.** Queues, buffers, retries, back-off, disk use and log volume have limits set in `config.yaml`, so a long search can't exhaust memory or storage. Repeated warnings are counted and summarized, not printed one per event.
+- **Privacy by construction.** Message and config schemas accept only hashed device IDs (16+ hex characters, longer than any MAC), so a raw MAC can't be published or configured, even by mistake. Validation errors never echo the rejected value, so refusing a raw MAC can't leak it into a log either.
 - **Test the failures, not just the demo.** Bad input, a restarted bus, a crashed module, a dropped link and a dead sensor each get a test.
 - **Measure every claim.** Latency, range, battery life and false-positive numbers come from tests we ran.
 
@@ -77,7 +77,7 @@ Key fields (see `schema.py` for the full definitions):
 - `ThermalHit`: `person`, `conf` (0–1), `bearing_deg`, `max_temp_c`
 - `RadarHit`: `present`, `moving | None`, `range_m | None`, `breaths_per_min | None`, `conf` (when nobody is present, all three are `None`, never `False` or 0)
 - `HazardReading`: `hazard` ("none" | "caution" | "danger"), `gas_raw` (0–1023), `temp_c | None`
-- `Target`: `id`, `confidence`, `priority` (1–4), `alive`, `bearing_deg`, `range_m`, `breaths_per_min`, `hazard`, `x`, `y` (meters from the start point, if known), `evidence` (per-sensor e values)
+- `Target`: `id`, `confidence`, `priority` (1–4), `alive`, `bearing_deg`, `range_m`, `breaths_per_min`, `hazard`, `x`, `y` (meters from the start point, if known), `evidence` (`Evidence`: per-sensor e values, `None` for a sensor with nothing on the track)
 - `Alert`: compact keys `v, id, p, c, x, y, brg, rng, alive, br, hz, t`; must encode to under 100 bytes; unknown values (`br`, `hz`, position) are `None` and left off the air, never sent as 0
 
 Bus usage: always go through `common/bus.py` (`Publisher(src)`, `Subscriber(topics)`). Do not open raw ZeroMQ sockets in modules. The proxy runs as its own process and binds local ports defined in `config.yaml`. `Publisher` stamps its `src` on any message that leaves `src` empty. The node and the command post each run their own bus on separate ports (`bus="post"` in code, `--bus post` on the command line), so both can run on one laptop in sim mode.

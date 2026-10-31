@@ -105,7 +105,9 @@ def test_subscriber_rejects_unknown_topics() -> None:
         Subscriber([])
 
 
-def test_bad_messages_are_dropped_not_passed_on(proxy: tuple[int, int]) -> None:
+def test_bad_messages_are_dropped_not_passed_on(
+    proxy: tuple[int, int], caplog: pytest.LogCaptureFixture
+) -> None:
     raw = zmq.Context.instance().socket(zmq.PUB)
     raw.connect(f"tcp://127.0.0.1:{proxy[0]}")
     garbage = [
@@ -132,6 +134,10 @@ def test_bad_messages_are_dropped_not_passed_on(proxy: tuple[int, int]) -> None:
                 assert more == ("find.ble", HIT)
     finally:
         raw.close(linger=0)
+    # Dozens of bad messages, one warning, and the raw MAC never reaches the log.
+    warnings = [r for r in caplog.records if r.name == "common.bus"]
+    assert len(warnings) == 1
+    assert "aabbccddeeff" not in caplog.text
 
 
 def test_bus_recovers_when_the_proxy_restarts(ports: tuple[int, int]) -> None:

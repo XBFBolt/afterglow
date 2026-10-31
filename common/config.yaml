@@ -7,6 +7,7 @@ bus:
   host: 127.0.0.1
   settle_s: 0.3          # pause after a publisher connects so early messages aren't dropped
   hwm: 1000              # max messages queued per socket; beyond this the newest are dropped
+  bad_msg_log_s: 10      # warn about dropped bad messages at most this often, with a count
   # The node and the command post each run their own bus. Separate ports let
   # both run on one laptop in sim mode.
   node: {pub_port: 5550, sub_port: 5551}

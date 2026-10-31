@@ -10,6 +10,7 @@ socket queue is capped at bus.hwm messages.
 
 import argparse
 import logging
+import math
 import time
 from typing import Self
 
@@ -85,28 +86,50 @@ class Subscriber:
         self._sock.connect(_endpoint(bus_ports(bus)[1]))
         for prefix in topics:
             self._sock.setsockopt_string(zmq.SUBSCRIBE, prefix)
+        self._dropped = 0
+        self._latest_error = ""
+        self._last_report = -math.inf
 
     def recv(self, timeout_s: float | None = None) -> tuple[str, Message] | None:
         """The next valid (topic, message), or None if none arrives within
         timeout_s. Blocks forever when timeout_s is None. Bad messages are
-        logged and skipped."""
+        skipped and counted; see _report_drops."""
         deadline = None if timeout_s is None else time.monotonic() + timeout_s
         while True:
             wait_ms = None
             if deadline is not None:
                 wait_ms = max(0, int((deadline - time.monotonic()) * 1000))
             if not self._sock.poll(wait_ms):
+                self._report_drops()
                 return None
             frames = self._sock.recv_multipart()
             try:
                 topic_b, data = frames
                 topic = topic_b.decode()
-                return topic, parse(topic, data)
+                msg = parse(topic, data)
             except ValueError as exc:
-                log.warning("dropped bad message: %s", exc)
+                self._dropped += 1
+                self._latest_error = str(exc)
+                self._report_drops()
                 # A flood of bad messages must not hold the caller past its timeout.
                 if deadline is not None and time.monotonic() >= deadline:
                     return None
+                continue
+            self._report_drops()
+            return topic, msg
+
+    def _report_drops(self) -> None:
+        """Warn about dropped messages at most once per bus.bad_msg_log_s, with a
+        count, so a flood of bad messages can't flood the log as well."""
+        now = time.monotonic()
+        if self._dropped and now - self._last_report >= get_config().bus.bad_msg_log_s:
+            log.warning(
+                "dropped %d bad message(s); latest: %s",
+                self._dropped,
+                self._latest_error,
+            )
+            self._dropped = 0
+            self._last_report = now
 
     def close(self) -> None:
         self._sock.close()

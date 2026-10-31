@@ -26,6 +26,13 @@ DeviceHash = Annotated[str, Field(pattern=r"^[0-9a-f]{16,64}$")]
 Rssi = Annotated[float, Field(ge=-130, lt=0)]
 WifiChannel = Annotated[int, Field(ge=1, le=14)]  # 2.4 GHz
 BreathRate = Annotated[float, Field(ge=0, le=100)]  # breaths per minute
+T_MAX = 4_102_444_800.0  # 2100-01-01; a later timestamp is a broken clock
+
+# Shared by every model. Errors never echo the rejected value: it could be the
+# very raw MAC the schema just refused, and errors end up in logs.
+STRICT = ConfigDict(
+    extra="forbid", frozen=True, allow_inf_nan=False, hide_input_in_errors=True
+)
 
 
 def _check_position(x: float | None, y: float | None) -> None:
@@ -36,9 +43,9 @@ def _check_position(x: float | None, y: float | None) -> None:
 class Message(BaseModel):
     """Fields every message carries. Messages are immutable once built."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+    model_config = STRICT
 
-    t: float = Field(default_factory=time.time, ge=0)  # Unix time, seconds
+    t: float = Field(default_factory=time.time, ge=0, le=T_MAX)  # Unix time, seconds
     src: str = Field(default="", max_length=32)  # module; Publisher fills it in
 
 
@@ -95,6 +102,18 @@ class HazardReading(Message):
     temp_c: float | None = Field(default=None, ge=-40, le=125)  # None: no sensor
 
 
+class Evidence(BaseModel):
+    """e_i per sensor, 0 to 1. None when that sensor has nothing on the track.
+    A model, not a dict, so it is as immutable as the Target holding it."""
+
+    model_config = STRICT
+
+    rf: Score | None = None
+    thermal: Score | None = None
+    radar: Score | None = None
+    audio: Score | None = None
+
+
 class Target(Message):
     """One fused track: a probable person."""
 
@@ -108,9 +127,7 @@ class Target(Message):
     hazard: Hazard | None = None  # None: no recent gas reading
     x: float | None = None  # meters east of the start point, if known
     y: float | None = None  # meters north of the start point, if known
-    evidence: dict[Literal["rf", "thermal", "radar", "audio"], Score] = Field(
-        default_factory=dict
-    )  # e_i per sensor
+    evidence: Evidence = Field(default_factory=Evidence)
 
     @model_validator(mode="after")
     def _whole_position(self) -> Self:
