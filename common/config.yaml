@@ -1,0 +1,70 @@
+# Afterglow configuration. Every weight, threshold, timing, port and device
+# path lives here; code reads it through common.config.get_config().
+
+sim: true                # fake hardware everywhere; set false on the Pi
+
+bus:
+  host: 127.0.0.1
+  settle_s: 0.3          # pause after a publisher connects so early messages aren't dropped
+  retry_s: 2             # proxy retry delay if its ports are busy
+  # The node and the command post each run their own bus. Separate ports let
+  # both run on one laptop in sim mode.
+  node: {pub_port: 5550, sub_port: 5551}
+  post: {pub_port: 5560, sub_port: 5561}
+
+log:
+  level: INFO
+  dir: logs              # bus recordings, relative to the repo root
+
+privacy:
+  salt: afterglow-2026   # salt for device-ID hashes (common/ids.py)
+  hash_chars: 12         # hex characters kept from the SHA-256 digest
+
+targets:
+  # Hashed IDs of our own test devices (common.ids.hash_device). Never put raw MACs here.
+  devices:
+    - 2efae4bfcede       # fake scenario victim phone (tools/fake_detections.py)
+
+rf:
+  p1m_dbm: -45           # RSSI at 1 m; calibrate on site
+  path_loss_n: 3.0       # log-distance path-loss exponent; calibrate on site
+  smooth_window_s: 2.5   # RSSI moving-average window
+  e_full_dbm: -60        # e_rf = 1 at or above this
+  e_zero_dbm: -90        # e_rf = 0 at or below this
+
+fusion:
+  weights: {rf: 0.5, thermal: 0.7, radar: 0.7, audio: 0.4}
+
+triage:
+  confirmed: 0.8         # C at or above: P1 or P2
+  possible: 0.5          # C at or above: P3; below: P4
+
+tracks:
+  bearing_merge_deg: 20  # merge hits whose bearings are this close...
+  window_s: 30           # ...and were seen within this window
+  resend_s: 30           # resend P1/P2 alerts this often
+
+relay:
+  ack_timeout_s: 10      # retry with back-off if no ack within this
+  max_alert_bytes: 100
+
+hazard:
+  caution_x: 1.5         # gas reading at this multiple of the clean-air baseline
+  danger_x: 2.5
+
+wifi:
+  iface: wlan1
+  channels: [1, 6, 11]
+
+thermal:
+  i2c_addr: 0x33
+
+serial:                  # check with `ls /dev/tty*` after plugging in
+  radar: /dev/ttyAMA0
+  gas: /dev/ttyACM0
+  lora: /dev/ttyUSB0
+
+tak:
+  url: udp://239.2.3.1:6969
+  uid_prefix: AG-
+  stale_s: 120

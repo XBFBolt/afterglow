@@ -1,0 +1,4 @@
+# Field node (the Pi, or a laptop in sim mode).
+# Start: uv run honcho -f Procfile.node start
+bus: python -m common.bus --bus node
+recorder: python -m common.recorder --bus node

@@ -1,0 +1,4 @@
+# Command post laptop. Uses its own bus ports, so it can run beside Procfile.node.
+# Start: uv run honcho -f Procfile.post start
+bus: python -m common.bus --bus post
+recorder: python -m common.recorder --bus post

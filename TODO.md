@@ -21,15 +21,15 @@ The software task list. Check items off as they land. The how and why live in [C
 ## Phase 0: foundation
 
 - [x] `pyproject.toml` (package `afterglow`, Python 3.11, ruff, pytest), `uv.lock`, `requirements.txt`
-- [ ] `common/config.yaml` + `common/config.py`: bus ports, fusion weights, triage thresholds, timings, serial paths, target device IDs, hash salt
-- [ ] `common/schema.py`: `WifiHit`, `BleHit`, `ThermalHit`, `RadarHit`, `HazardReading`, `Target`, `Alert`
-- [ ] Device-ID hashing helper (salted SHA-256, truncated)
-- [ ] `common/bus.py`: `Publisher`, `Subscriber`, proxy process
-- [ ] Bus logger: every message appended to `logs/<run>.jsonl`
-- [ ] `tools/tap.py`: print all bus traffic
-- [ ] `tools/fake_detections.py`: scripted victim (device gets warmer → heat appears → breathing confirmed)
-- [ ] `Procfile.node` and `Procfile.post`
-- [ ] Tests: schema round-trips, `Alert` encodes under 100 bytes, hashing, bus pub/sub smoke test
+- [x] `common/config.yaml` + `common/config.py`: bus ports, fusion weights, triage thresholds, timings, serial paths, target device IDs, hash salt
+- [x] `common/schema.py`: `WifiHit`, `BleHit`, `ThermalHit`, `RadarHit`, `HazardReading`, `Target`, `Alert`
+- [x] `common/ids.py`: device-ID hashing (salted SHA-256, truncated)
+- [x] `common/bus.py`: `Publisher`, `Subscriber`, proxy process; separate node and post buses
+- [x] `common/recorder.py`: every message appended to `logs/<start time>-<bus>.jsonl`
+- [x] `tools/tap.py`: print all bus traffic
+- [x] `tools/fake_detections.py`: scripted victim (device gets warmer → heat appears → breathing confirmed)
+- [x] `Procfile.node` and `Procfile.post`
+- [x] Tests: schema validation and round-trips, hashing, bus pub/sub, recorder lines, fake scenario story
 
 ## Phase 1: thin end-to-end path in sim
 
@@ -38,7 +38,7 @@ Fake scenario → fusion → relay queue → LoRa (sim) → receiver → web map
 - [ ] `find/rssi_filter.py`: smoothing, log-distance range estimate, `e_rf` mapping (−60 dBm → 1, −90 dBm → 0) + tests
 - [ ] `fuse/tracks.py`: merge hits by device hash, or bearing within 20° seen in the last 30 s + tests
 - [ ] `fuse/fusion.py`: noisy-OR confidence, P1–P4 triage, send rules (new track, priority change, every 30 s for P1/P2) + tests
-- [ ] `relay/codec.py`: `Alert` to and from compact bytes, under 100 bytes + tests
+- [ ] `relay/codec.py`: `Alert` to and from compact bytes, under 100 bytes + tests (a full alert as compact JSON is already 99 bytes with small numbers: drop empty fields or struct-pack)
 - [ ] `relay/priority_queue.py`: priority then age, newer alert replaces queued older one, back-off retry after 10 s without ack, P1 never blocked + tests
 - [ ] `relay/lora_tx.py` and `relay/lora_rx.py` with a sim radio that can drop and restore the link
 - [ ] `map/web/`: Flask + Leaflet, markers colored by priority, vitals popup, hazard ring, P1-first side list, "last received" timestamp, x/y floor-plan mode

@@ -21,7 +21,8 @@ Each module is its own small Python process. Sensor modules publish typed JSON m
 ## Repo layout
 
 ```
-common/        bus.py (pub/sub helper + proxy), schema.py (all message models), config.py, config.yaml
+common/        bus.py (pub/sub helper + proxy), schema.py (all message models), config.py, config.yaml,
+               ids.py (device-ID hashing), recorder.py (bus → logs/*.jsonl)
 find/          wifi_sniffer.py, ble_scanner.py, rssi_filter.py
 confirm/       thermal.py, person_detect.py, radar.py
 hazard/        arduino/gas_sensor.ino, gas_reader.py
@@ -64,10 +65,10 @@ Key fields (see `schema.py` for the full definitions):
 - `ThermalHit`: `person`, `conf` (0–1), `bearing_deg`, `max_temp_c`
 - `RadarHit`: `present`, `moving`, `range_m`, `breaths_per_min | None`, `conf`
 - `HazardReading`: `hazard` ("none" | "caution" | "danger"), `gas_raw`, `temp_c`
-- `Target`: `id`, `confidence`, `priority` (1–4), `alive`, `bearing_deg`, `range_m`, `breaths_per_min`, `hazard`, `evidence` (per-sensor e values)
+- `Target`: `id`, `confidence`, `priority` (1–4), `alive`, `bearing_deg`, `range_m`, `breaths_per_min`, `hazard`, `x`, `y` (meters from the start point, if known), `evidence` (per-sensor e values)
 - `Alert`: compact keys `v, id, p, c, x, y, brg, rng, alive, br, hz, t`; must encode to under 100 bytes
 
-Bus usage: always go through `common/bus.py` (`Publisher(src)`, `Subscriber(topics)`). Do not open raw ZeroMQ sockets in modules. The proxy runs as its own process and binds local ports defined in `config.yaml`.
+Bus usage: always go through `common/bus.py` (`Publisher(src)`, `Subscriber(topics)`). Do not open raw ZeroMQ sockets in modules. The proxy runs as its own process and binds local ports defined in `config.yaml`. `Publisher` stamps its `src` on any message that leaves `src` empty. The node and the command post each run their own bus on separate ports (`bus="post"` in code, `--bus post` on the command line), so both can run on one laptop in sim mode.
 
 ## Core logic (keep it explainable)
 
@@ -152,7 +153,7 @@ Serial device paths and ports belong in `config.yaml`.
 
 ## Current priorities
 
-1. Phase 0: schema, bus, logger, fake scenario.
+1. ~~Phase 0: schema, bus, logger, fake scenario.~~ Done.
 2. Thin end-to-end path: fake scenario → fusion → relay queue → LoRa (sim) → receiver → web map and TAK.
 3. Real sensor modules, one at a time, each behind `--sim`.
 4. Stretch only after the above is solid: Hailo person detection, breathing-rate FFT, directional bearing.
