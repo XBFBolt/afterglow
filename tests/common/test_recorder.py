@@ -25,6 +25,22 @@ def test_line_is_plain_json() -> None:
     assert rec["msg"]["src"] == "radar"
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        '{"topic": "find.ble", "msg": {"de',  # cut off by a power loss
+        '{"msg": {}}',  # no topic
+        "[1, 2]",  # JSON, wrong shape
+        '{"topic": "find.gps", "msg": {}}',
+        '{"topic": "confirm.radar", "msg": {"present": false}}',
+    ],
+)
+def test_bad_lines_raise_value_error(line: str) -> None:
+    # A replay skips a ValueError and carries on; anything else would stop it.
+    with pytest.raises(ValueError):
+        parse_line(line)
+
+
 def test_log_path_names_run_by_start_time_and_bus() -> None:
     path = log_path(Path("logs"), "post", datetime(2026, 11, 7, 14, 3, 22))
     assert path == Path("logs/20261107-140322-post.jsonl")

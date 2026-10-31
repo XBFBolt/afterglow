@@ -32,7 +32,11 @@ Port = Annotated[int, Field(ge=1024, le=65535)]
 
 
 class Section(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+    # Errors name the key and the rule but never echo the value: a raw MAC typed
+    # into targets.devices must not end up in the launch error log.
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, allow_inf_nan=False, hide_input_in_errors=True
+    )
 
 
 class Ports(Section):

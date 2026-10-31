@@ -112,6 +112,7 @@ def test_unknown_topic_is_rejected() -> None:
         (BleHit, _rf(dev="aabbccddeeff")),  # raw MAC, separators stripped
         (BleHit, _rf(rssi_dbm=float("inf"))),
         (BleHit, _rf(rssi_dbm=0)),  # a driver's "no reading"
+        (BleHit, _rf(rssi_dbm=-127)),  # bleak's "no reading" on Linux
         (BleHit, _rf(rssi_smooth=196)),  # -60 read as an unsigned byte
         (WifiHit, _rf(channel=0)),
         (BleHit, _rf(t=-1)),
@@ -134,6 +135,16 @@ def test_unknown_topic_is_rejected() -> None:
         ),
         (HazardReading, {"hazard": "none", "gas_raw": -1}),
         (Target, {"id": 1, "confidence": 0.9, "priority": 1, "alive": True, "x": 5}),
+        (
+            Target,
+            {
+                "id": 1,
+                "confidence": 0.9,
+                "priority": 1,
+                "alive": True,
+                "breaths_per_min": 900,
+            },
+        ),
         (Alert, {"id": 1, "p": 1, "c": 90, "alive": True, "y": 3}),  # half a position
         (Alert, {"v": 2, "id": 1, "p": 1, "c": 90, "alive": True}),  # unknown format
     ],

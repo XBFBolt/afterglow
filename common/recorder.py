@@ -33,9 +33,13 @@ def format_line(topic: str, msg: Message) -> str:
 
 
 def parse_line(line: str) -> tuple[str, Message]:
-    """Inverse of format_line; ValueError on a bad line."""
-    rec = json.loads(line)
-    return rec["topic"], model_for(rec["topic"]).model_validate(rec["msg"])
+    """Inverse of format_line; ValueError on a bad line, including valid JSON
+    of the wrong shape, so a reader can skip it and carry on."""
+    try:
+        rec = json.loads(line)
+        return rec["topic"], model_for(rec["topic"]).model_validate(rec["msg"])
+    except (KeyError, TypeError) as exc:
+        raise ValueError(f"not a recorded message: {exc!r}") from None
 
 
 def disk_ok(path: Path, min_free_mb: int) -> bool:

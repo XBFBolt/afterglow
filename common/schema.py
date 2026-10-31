@@ -4,7 +4,7 @@ This file is the contract between modules. All producers and consumers import
 from here; never hand-build message dicts. Changing a field is a breaking
 change: update every producer, consumer and test in the same commit.
 
-Messages are validated when built and when received: no NaN, no out-of-range
+Messages are validated when built, published and received: no NaN, no out-of-range
 values, no unknown fields, and device IDs must already be hashed. A value that
 isn't known is None, never a default that looks like a real reading.
 """
@@ -22,8 +22,9 @@ Hazard = Literal["none", "caution", "danger"]
 # BLE address (12 hex digits) can't pass, with or without separators.
 DeviceHash = Annotated[str, Field(pattern=r"^[0-9a-f]{16,64}$")]
 # Physical limits: a reading outside them is a bug or a broken sensor, not data.
-# Drivers use 0 (and 127) dBm for "no reading"; a real signal is always below 0.
-Rssi = Annotated[float, Field(ge=-130, lt=0)]
+# "No reading" comes through as a fill value: 0, 127 or -128 dBm from drivers,
+# -127 from bleak on Linux. Real signals sit between about -110 and 0.
+Rssi = Annotated[float, Field(ge=-120, lt=0)]
 WifiChannel = Annotated[int, Field(ge=1, le=14)]  # 2.4 GHz
 BreathRate = Annotated[float, Field(ge=0, le=100)]  # breaths per minute
 T_MAX = 4_102_444_800.0  # 2100-01-01; a later timestamp is a broken clock
@@ -123,7 +124,7 @@ class Target(Message):
     alive: bool  # thermal or radar confirms life; False means not confirmed
     bearing_deg: Bearing | None = None
     range_m: float | None = Field(default=None, ge=0)
-    breaths_per_min: float | None = Field(default=None, ge=0)
+    breaths_per_min: BreathRate | None = None
     hazard: Hazard | None = None  # None: no recent gas reading
     x: float | None = None  # meters east of the start point, if known
     y: float | None = None  # meters north of the start point, if known

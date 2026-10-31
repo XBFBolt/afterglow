@@ -78,7 +78,7 @@ Key fields (see `schema.py` for the full definitions):
 - `RadarHit`: `present`, `moving | None`, `range_m | None`, `breaths_per_min | None`, `conf` (when nobody is present, all three are `None`, never `False` or 0)
 - `HazardReading`: `hazard` ("none" | "caution" | "danger"), `gas_raw` (0–1023), `temp_c | None`
 - `Target`: `id`, `confidence`, `priority` (1–4), `alive`, `bearing_deg`, `range_m`, `breaths_per_min`, `hazard`, `x`, `y` (meters from the start point, if known), `evidence` (`Evidence`: per-sensor e values, `None` for a sensor with nothing on the track)
-- `Alert`: compact keys `v, id, p, c, x, y, brg, rng, alive, br, hz, t`; must encode to under 100 bytes; unknown values (`br`, `hz`, position) are `None` and left off the air, never sent as 0
+- `Alert`: compact keys `v, id, p, c, x, y, brg, rng, alive, br, hz, t`; must encode to at most `relay.max_alert_bytes` (100); unknown values (`br`, `hz`, position) are `None` and left off the air, never sent as 0
 
 Bus usage: always go through `common/bus.py` (`Publisher(src)`, `Subscriber(topics)`). Do not open raw ZeroMQ sockets in modules. The proxy runs as its own process and binds local ports defined in `config.yaml`. `Publisher` stamps its `src` on any message that leaves `src` empty. The node and the command post each run their own bus on separate ports (`bus="post"` in code, `--bus post` on the command line), so both can run on one laptop in sim mode.
 

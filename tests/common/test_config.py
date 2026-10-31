@@ -62,3 +62,14 @@ def test_broken_yaml_fails_at_load(tmp_path: Path) -> None:
     bad.write_text("sim: true\n  bus: [\n")
     with pytest.raises(ValueError, match="invalid config"):
         load_config(bad)
+
+
+def test_config_errors_name_the_key_but_never_echo_a_raw_mac(tmp_path: Path) -> None:
+    data = yaml.safe_load(CONFIG_PATH.read_text())
+    data["targets"]["devices"] = ["aa:bb:cc:dd:ee:ff"]
+    bad = tmp_path / "config.yaml"
+    bad.write_text(yaml.safe_dump(data))
+    with pytest.raises(ValueError) as caught:
+        load_config(bad)
+    assert "targets.devices" in str(caught.value)
+    assert "aa:bb" not in str(caught.value)
