@@ -117,6 +117,8 @@ uv run python -m tools.replay logs/<run>.jsonl
 
 Run modules as packages (`python -m find.ble_scanner`), not as loose scripts.
 
+`requirements.txt` is a pip fallback for teammates without uv, generated from `uv.lock`. Never edit it by hand: after any `uv add` or `uv remove`, regenerate it with `uv export --format requirements-txt --no-hashes -o requirements.txt` and commit both files together.
+
 ## Coding rules
 
 - Python 3.11. Type hints on all functions. Formatting and linting with `ruff`.

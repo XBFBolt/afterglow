@@ -16,11 +16,11 @@ The software task list. Check items off as they land. The how and why live in [C
 ## Setup
 
 - [x] GitHub repo created and pushed
-- [ ] Everyone installs `uv` and can run `uv sync && uv run pytest`
+- [x] `uv` installed and `uv sync` works; `requirements.txt` + README setup steps for pip users
 
 ## Phase 0: foundation
 
-- [ ] `pyproject.toml` (package `afterglow`, Python 3.11, ruff, pytest)
+- [x] `pyproject.toml` (package `afterglow`, Python 3.11, ruff, pytest), `uv.lock`, `requirements.txt`
 - [ ] `common/config.yaml` + `common/config.py`: bus ports, fusion weights, triage thresholds, timings, serial paths, target device IDs, hash salt
 - [ ] `common/schema.py`: `WifiHit`, `BleHit`, `ThermalHit`, `RadarHit`, `HazardReading`, `Target`, `Alert`
 - [ ] Device-ID hashing helper (salted SHA-256, truncated)
