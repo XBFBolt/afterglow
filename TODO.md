@@ -91,7 +91,6 @@ Each behind `--sim`, sim path written first, and never able to crash the node. A
 - [ ] `hazard/gas_reader.py`: clean-air baseline, ×1.5 caution, ×2.5 danger
 - [ ] `relay/lora_tx.py` and `relay/lora_rx.py` real path via `meshtastic` with want-ack
 - [ ] systemd unit per process on the Pi: starts on boot with no laptop or keyboard, restarts any process that dies (honcho stops everything when one process exits: fine for dev, not for the field)
-- [ ] Secret hash salt per deployment, kept out of git; the committed salt only protects sim data, and anyone holding it can brute-force a hashed MAC
 
 ## Phase 3: stretch (only once everything above is solid)
 
@@ -111,3 +110,12 @@ Each behind `--sim`, sim path written first, and never able to crash the node. A
 - [ ] Link drop: unplug the receiver for 30 s, plug it back, queued P1 arrives first
 - [ ] End-to-end latency from detection to marker measured, under 5 s
 - [ ] Replay: `tools/replay.py` reproduces a recorded good run end to end
+
+## If we had more time: security
+
+Known gaps, left for after the demo. The node bus is localhost-only, every message is validated, and MACs are hashed on capture; these are what's still open.
+
+- [ ] Private Meshtastic channel with a random key on both boards (a settings change when flashing); the default channel's key is public, so anyone nearby with a Meshtastic radio can read alerts or send fake ones
+- [ ] Signed alerts, so the receiver can tell our board from anyone else holding the channel key
+- [ ] Secret hash salt per deployment, kept out of git; the committed salt only protects sim data, and anyone holding it can brute-force a hashed MAC
+- [ ] TAK traffic encrypted (TAK server over TLS) instead of plain UDP multicast; until then, run it only on our own password-protected router
