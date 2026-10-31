@@ -15,12 +15,14 @@ from common.schema import (
     parse,
 )
 
+DEV = "2efae4bfcede1097"
+
 SAMPLES: dict[str, Message] = {
     "find.wifi": WifiHit(
-        dev="2efae4bfcede", rssi_dbm=-71, rssi_smooth=-70.4, est_range_m=6.2, channel=6
+        dev=DEV, rssi_dbm=-71, rssi_smooth=-70.4, est_range_m=6.2, channel=6
     ),
     "find.ble": BleHit(
-        dev="2efae4bfcede",
+        dev=DEV,
         rssi_dbm=-64,
         rssi_smooth=-65.1,
         est_range_m=4.0,
@@ -49,6 +51,12 @@ SAMPLES: dict[str, Message] = {
     ),
     "relay.in": Alert(id=7, p=1, c=92, alive=True),
 }
+
+
+def _rf(**changes: object) -> dict:
+    """Valid RF-hit fields with some changed."""
+    fields = {"dev": DEV, "rssi_dbm": -60, "rssi_smooth": -60, "est_range_m": 1}
+    return fields | changes
 
 
 def test_every_topic_has_a_sample() -> None:
@@ -100,24 +108,34 @@ def test_unknown_topic_is_rejected() -> None:
             RadarHit,
             {"present": True, "moving": False, "range_m": float("nan"), "conf": 0.5},
         ),
+        (BleHit, _rf(dev="AA:BB:CC:DD:EE:FF")),  # raw MAC
+        (BleHit, _rf(dev="aabbccddeeff")),  # raw MAC, separators stripped
+        (BleHit, _rf(rssi_dbm=float("inf"))),
+        (BleHit, _rf(rssi_dbm=0)),  # a driver's "no reading"
+        (BleHit, _rf(rssi_smooth=196)),  # -60 read as an unsigned byte
+        (WifiHit, _rf(channel=0)),
+        (BleHit, _rf(t=-1)),
         (
-            BleHit,
+            ThermalHit,
+            {"person": True, "conf": 0.9, "bearing_deg": 10, "max_temp_c": 900},
+        ),
+        (RadarHit, {"present": False, "moving": False, "conf": 0.1}),  # empty room
+        (RadarHit, {"present": False, "range_m": 0, "conf": 0.1}),
+        (RadarHit, {"present": True, "range_m": 2, "conf": 0.8}),  # moving unknown
+        (
+            RadarHit,
             {
-                "dev": "AA:BB:CC:DD:EE:FF",
-                "rssi_dbm": -60,
-                "rssi_smooth": -60,
-                "est_range_m": 1,
+                "present": True,
+                "moving": False,
+                "range_m": 2,
+                "breaths_per_min": 900,
+                "conf": 0.8,
             },
         ),
-        (
-            BleHit,
-            {
-                "dev": "2efae4bfcede",
-                "rssi_dbm": float("inf"),
-                "rssi_smooth": -60,
-                "est_range_m": 1,
-            },
-        ),
+        (HazardReading, {"hazard": "none", "gas_raw": -1}),
+        (Target, {"id": 1, "confidence": 0.9, "priority": 1, "alive": True, "x": 5}),
+        (Alert, {"id": 1, "p": 1, "c": 90, "alive": True, "y": 3}),  # half a position
+        (Alert, {"v": 2, "id": 1, "p": 1, "c": 90, "alive": True}),  # unknown format
     ],
 )
 def test_bad_values_are_rejected(model: type[Message], fields: dict) -> None:
@@ -136,3 +154,6 @@ def test_unknown_values_default_to_none_not_zero() -> None:
     assert target.hazard is None and target.breaths_per_min is None
     alert = Alert(id=1, p=3, c=60, alive=False)
     assert alert.br is None and alert.hz is None
+    empty_room = RadarHit(present=False, conf=0.05)
+    assert empty_room.moving is None and empty_room.range_m is None
+    assert HazardReading(hazard="none", gas_raw=180).temp_c is None

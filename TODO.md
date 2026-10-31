@@ -80,7 +80,7 @@ Get each part talking to software standalone before wrapping it in a module.
 
 ## Phase 2: real sensor modules
 
-Each behind `--sim`, sim path written first, and never able to crash the node.
+Each behind `--sim`, sim path written first, and never able to crash the node. A reading that fails schema validation (bad frame, out-of-range value) is logged and dropped on its own, not allowed to restart the module.
 
 - [ ] `find/ble_scanner.py`: bleak, flags known target IDs from config
 - [ ] `find/wifi_sniffer.py`: monitor mode, channel hop 1/6/11, MAC hashed on capture

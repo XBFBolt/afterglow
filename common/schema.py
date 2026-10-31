@@ -10,16 +10,27 @@ isn't known is None, never a default that looks like a real reading.
 """
 
 import time
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Score = Annotated[float, Field(ge=0, le=1)]
 Priority = Annotated[int, Field(ge=1, le=4)]  # P1 urgent ... P4 device only
 Bearing = Annotated[float, Field(ge=0, lt=360)]  # degrees clockwise
 Hazard = Literal["none", "caution", "danger"]
-# Output of common.ids.hash_device. Rejects raw MACs and BLE addresses.
-DeviceHash = Annotated[str, Field(pattern=r"^[0-9a-f]{8,64}$")]
+# Output of common.ids.hash_device. At least 16 hex characters, so a raw MAC or
+# BLE address (12 hex digits) can't pass, with or without separators.
+DeviceHash = Annotated[str, Field(pattern=r"^[0-9a-f]{16,64}$")]
+# Physical limits: a reading outside them is a bug or a broken sensor, not data.
+# Drivers use 0 (and 127) dBm for "no reading"; a real signal is always below 0.
+Rssi = Annotated[float, Field(ge=-130, lt=0)]
+WifiChannel = Annotated[int, Field(ge=1, le=14)]  # 2.4 GHz
+BreathRate = Annotated[float, Field(ge=0, le=100)]  # breaths per minute
+
+
+def _check_position(x: float | None, y: float | None) -> None:
+    if (x is None) != (y is None):
+        raise ValueError("x and y must be known together")
 
 
 class Message(BaseModel):
@@ -27,7 +38,7 @@ class Message(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
-    t: float = Field(default_factory=time.time)  # Unix time, seconds
+    t: float = Field(default_factory=time.time, ge=0)  # Unix time, seconds
     src: str = Field(default="", max_length=32)  # module; Publisher fills it in
 
 
@@ -35,14 +46,14 @@ class RfHit(Message):
     """A device heard over the air."""
 
     dev: DeviceHash
-    rssi_dbm: float
-    rssi_smooth: float
+    rssi_dbm: Rssi
+    rssi_smooth: Rssi
     est_range_m: float = Field(ge=0)
     bearing_deg: Bearing | None = None
 
 
 class WifiHit(RfHit):
-    channel: int
+    channel: WifiChannel
 
 
 class BleHit(RfHit):
@@ -53,21 +64,35 @@ class ThermalHit(Message):
     person: bool
     conf: Score
     bearing_deg: Bearing
-    max_temp_c: float
+    max_temp_c: float = Field(ge=-40, le=300)  # MLX90640's measuring range
 
 
 class RadarHit(Message):
+    """When nobody is present, moving, range and breathing are unknown (None),
+    never False or 0, so an empty room can't read as a still victim."""
+
     present: bool
-    moving: bool
-    range_m: float = Field(ge=0)
-    breaths_per_min: float | None = Field(default=None, ge=0)
+    moving: bool | None = None
+    range_m: float | None = Field(default=None, ge=0)
+    breaths_per_min: BreathRate | None = None
     conf: Score
+
+    @model_validator(mode="after")
+    def _consistent(self) -> Self:
+        if self.present and (self.moving is None or self.range_m is None):
+            raise ValueError("a present target needs moving and range_m")
+        vitals = (self.moving, self.range_m, self.breaths_per_min)
+        if not self.present and any(v is not None for v in vitals):
+            raise ValueError(
+                "nobody present: moving, range_m, breaths_per_min are None"
+            )
+        return self
 
 
 class HazardReading(Message):
     hazard: Hazard
-    gas_raw: int
-    temp_c: float
+    gas_raw: int = Field(ge=0, le=1023)  # Arduino 10-bit ADC
+    temp_c: float | None = Field(default=None, ge=-40, le=125)  # None: no sensor
 
 
 class Target(Message):
@@ -87,12 +112,17 @@ class Target(Message):
         default_factory=dict
     )  # e_i per sensor
 
+    @model_validator(mode="after")
+    def _whole_position(self) -> Self:
+        _check_position(self.x, self.y)
+        return self
+
 
 class Alert(Message):
     """What crosses the LoRa link. Short keys and whole numbers keep it small;
     relay/codec.py owns the over-the-air encoding."""
 
-    v: int = 1  # format version
+    v: Literal[1] = 1  # format version; any other is rejected, not misread
     id: int = Field(ge=0)  # track id
     p: Priority
     c: int = Field(ge=0, le=100)  # confidence, percent
@@ -101,8 +131,13 @@ class Alert(Message):
     brg: Annotated[int, Field(ge=0, lt=360)] | None = None  # bearing, degrees
     rng: Annotated[int, Field(ge=0)] | None = None  # range, meters
     alive: bool
-    br: Annotated[int, Field(ge=0)] | None = None  # breaths per minute
+    br: Annotated[int, Field(ge=0, le=100)] | None = None  # breaths per minute
     hz: Annotated[int, Field(ge=0, le=2)] | None = None  # 0 none, 1 caution, 2 danger
+
+    @model_validator(mode="after")
+    def _whole_position(self) -> Self:
+        _check_position(self.x, self.y)
+        return self
 
 
 TOPICS: dict[str, type[Message]] = {

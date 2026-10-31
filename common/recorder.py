@@ -45,15 +45,17 @@ def disk_ok(path: Path, min_free_mb: int) -> bool:
 def record(bus: str, path: Path) -> None:
     """Append every message on the bus to path. Runs until an error."""
     cfg = get_config().log
+    path.parent.mkdir(parents=True, exist_ok=True)  # in case it was deleted mid-run
     with Subscriber([""], bus=bus) as sub, path.open("a") as f:
         paused = False
         last_sync = 0.0  # sync and check the disk on the first pass
         while True:
-            got = sub.recv(timeout_s=cfg.fsync_s)
+            due = last_sync + cfg.fsync_s
+            got = sub.recv(timeout_s=max(0.0, due - time.monotonic()))
             if got is not None and not paused:
                 f.write(format_line(*got))
                 f.flush()
-            if time.monotonic() - last_sync >= cfg.fsync_s:
+            if time.monotonic() >= due:
                 os.fsync(f.fileno())
                 last_sync = time.monotonic()
                 low = not disk_ok(path.parent, cfg.min_free_mb)
@@ -71,7 +73,6 @@ def main() -> None:
     args = parser.parse_args()
     setup_logging()
     path = log_path(REPO_ROOT / get_config().log.dir, args.bus, datetime.now())
-    path.parent.mkdir(parents=True, exist_ok=True)
     log.info("recording %s bus to %s", args.bus, path)
     run_forever("recorder", lambda: record(args.bus, path))
 

@@ -4,7 +4,7 @@ from tools.tap import format_message
 
 def test_line_shows_topic_source_and_fields() -> None:
     msg = BleHit(
-        dev="2efae4bfcede",
+        dev="2efae4bfcede1097",
         rssi_dbm=-64.0,
         rssi_smooth=-65.1234,
         est_range_m=4.0,

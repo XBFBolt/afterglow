@@ -24,12 +24,13 @@ log:
 
 privacy:
   salt: afterglow-2026   # salt for device-ID hashes (common/ids.py)
-  hash_chars: 12         # hex characters kept from the SHA-256 digest
+  hash_chars: 16         # hex characters kept from the SHA-256 digest; 16+, so a hash never looks like a MAC
 
 targets:
   # Hashed IDs of our own test devices (common.ids.hash_device). Never put raw MACs here.
+  # Changing the salt or hash_chars changes every hash: re-hash these too.
   devices:
-    - 2efae4bfcede       # fake scenario victim phone (tools/fake_detections.py)
+    - 2efae4bfcede1097   # fake scenario victim phone (tools/fake_detections.py)
 
 rf:
   p1m_dbm: -45           # RSSI at 1 m; calibrate on site

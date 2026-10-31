@@ -48,10 +48,15 @@ class Publisher:
         time.sleep(get_config().bus.settle_s)
 
     def publish(self, topic: str, msg: Message) -> None:
+        """ValueError if msg is the wrong model for topic or isn't valid."""
         if model_for(topic) is not type(msg):
             raise ValueError(f"{type(msg).__name__} doesn't belong on {topic!r}")
-        if not msg.src:
-            msg = msg.model_copy(update={"src": self.src})
+        # Validate again on the way out: model_copy(update=...) skips validation,
+        # and a bad message must fail here, loudly, not get dropped by every
+        # subscriber while this module looks healthy.
+        data = msg.model_dump()
+        data["src"] = data["src"] or self.src
+        msg = type(msg).model_validate(data)
         self._sock.send_multipart([topic.encode(), msg.model_dump_json().encode()])
 
     def close(self) -> None:
@@ -99,6 +104,9 @@ class Subscriber:
                 return topic, parse(topic, data)
             except ValueError as exc:
                 log.warning("dropped bad message: %s", exc)
+                # A flood of bad messages must not hold the caller past its timeout.
+                if deadline is not None and time.monotonic() >= deadline:
+                    return None
 
     def close(self) -> None:
         self._sock.close()

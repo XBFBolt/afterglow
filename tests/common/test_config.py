@@ -39,6 +39,10 @@ def _drop(section: str) -> Callable[[dict], None]:
         _set("bus.node.pub_prot", 5555),  # typo
         _set("log.level", "LOUD"),
         _set("relay.max_alert_bytes", 500),  # over Meshtastic's limit
+        _set("bus.host", "0.0.0.0"),  # bus open to the network
+        _set("privacy.hash_chars", 12),  # as long as a raw MAC
+        _set("privacy.hash_chars", 20),  # targets were hashed at 16
+        _set("wifi.channels", [1, 6, 15]),
         _drop("triage"),
     ],
 )
@@ -49,5 +53,12 @@ def test_bad_config_fails_at_load(
     change(data)
     bad = tmp_path / "config.yaml"
     bad.write_text(yaml.safe_dump(data))
+    with pytest.raises(ValueError, match="invalid config"):
+        load_config(bad)
+
+
+def test_broken_yaml_fails_at_load(tmp_path: Path) -> None:
+    bad = tmp_path / "config.yaml"
+    bad.write_text("sim: true\n  bus: [\n")
     with pytest.raises(ValueError, match="invalid config"):
         load_config(bad)

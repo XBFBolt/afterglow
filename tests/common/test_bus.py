@@ -9,10 +9,9 @@ import common.bus as bus_mod
 from common.bus import Publisher, Subscriber
 from common.schema import BleHit, Message, WifiHit
 
-HIT = BleHit(dev="abc12345de", rssi_dbm=-70, rssi_smooth=-71, est_range_m=5)
-WIFI = WifiHit(
-    dev="abc12345de", rssi_dbm=-75, rssi_smooth=-74, est_range_m=7, channel=1
-)
+DEV = "0123456789abcdef"
+HIT = BleHit(dev=DEV, rssi_dbm=-70, rssi_smooth=-71, est_range_m=5)
+WIFI = WifiHit(dev=DEV, rssi_dbm=-75, rssi_smooth=-74, est_range_m=7, channel=1)
 
 
 def _free_port() -> int:
@@ -91,6 +90,14 @@ def test_publish_rejects_the_wrong_model(proxy: tuple[int, int]) -> None:
         pub.publish("find.wifi", HIT)
 
 
+def test_publish_rejects_what_subscribers_would_drop(proxy: tuple[int, int]) -> None:
+    # model_copy(update=...) skips validation; publish must not.
+    with Publisher("test") as pub, pytest.raises(ValueError):
+        pub.publish("find.ble", HIT.model_copy(update={"rssi_dbm": float("nan")}))
+    with Publisher("x" * 40) as pub, pytest.raises(ValueError):  # src too long
+        pub.publish("find.ble", HIT)
+
+
 def test_subscriber_rejects_unknown_topics() -> None:
     with pytest.raises(ValueError, match="no topic matches"):
         Subscriber(["find.gps"])
@@ -103,7 +110,7 @@ def test_bad_messages_are_dropped_not_passed_on(proxy: tuple[int, int]) -> None:
     raw.connect(f"tcp://127.0.0.1:{proxy[0]}")
     garbage = [
         [b"find.ble", b"not json"],
-        [b"find.ble", b'{"dev": "aa:bb:cc:dd:ee:ff", "rssi_dbm": -70}'],  # raw MAC
+        [b"find.ble", HIT.model_dump_json().replace(DEV, "aabbccddeeff").encode()],
         [b"find.ble", HIT.model_dump_json().replace("-70.0", "NaN").encode()],
         [b"find.bless", HIT.model_dump_json().encode()],  # unknown topic
         [b"find.ble"],  # missing body

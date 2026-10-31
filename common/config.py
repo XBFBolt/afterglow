@@ -6,6 +6,7 @@ out of range or thresholds in the wrong order stop the process at launch with a
 clear error, never halfway through a search.
 """
 
+import ipaddress
 import logging
 from functools import cache
 from pathlib import Path
@@ -18,10 +19,11 @@ from pydantic import (
     Field,
     PositiveFloat,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
-from common.schema import DeviceHash, Score
+from common.schema import DeviceHash, Score, WifiChannel
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = Path(__file__).with_name("config.yaml")
@@ -44,6 +46,14 @@ class BusConfig(Section):
     hwm: int = Field(gt=0)
     node: Ports
     post: Ports
+
+    @field_validator("host")
+    @classmethod
+    def _loopback(cls, host: str) -> str:
+        # Anyone who can reach the bus can inject detections.
+        if not ipaddress.IPv4Address(host).is_loopback:
+            raise ValueError("the bus must bind to a loopback address, e.g. 127.0.0.1")
+        return host
 
     @model_validator(mode="after")
     def _ports_differ(self) -> Self:
@@ -78,7 +88,7 @@ class LogConfig(Section):
 
 class PrivacyConfig(Section):
     salt: str = Field(min_length=8)
-    hash_chars: int = Field(ge=8, le=64)
+    hash_chars: int = Field(ge=16, le=64)  # longer than a raw MAC; see DeviceHash
 
 
 class TargetsConfig(Section):
@@ -145,7 +155,7 @@ class HazardConfig(Section):
 
 class WifiConfig(Section):
     iface: str
-    channels: list[Annotated[int, Field(ge=1, le=14)]] = Field(min_length=1)
+    channels: list[WifiChannel] = Field(min_length=1)
 
 
 class ThermalConfig(Section):
@@ -182,14 +192,20 @@ class Config(Section):
     serial: SerialConfig
     tak: TakConfig
 
+    @model_validator(mode="after")
+    def _targets_match_hash_length(self) -> Self:
+        # A target hashed at another length could never match a hit.
+        n = self.privacy.hash_chars
+        if any(len(dev) != n for dev in self.targets.devices):
+            raise ValueError(f"every target hash must be {n} characters (hash_chars)")
+        return self
+
 
 def load_config(path: Path) -> Config:
     """Read and validate a config file; ValueError naming every problem."""
-    with path.open() as f:
-        data = yaml.safe_load(f)
     try:
-        return Config.model_validate(data)
-    except ValidationError as exc:
+        return Config.model_validate(yaml.safe_load(path.read_text()))
+    except (yaml.YAMLError, ValidationError) as exc:
         raise ValueError(f"invalid config {path}:\n{exc}") from None
 
 

@@ -136,9 +136,7 @@ def _thermal(rng: random.Random) -> Iterator[tuple[str, Message]]:
 def _radar(rng: random.Random) -> Iterator[tuple[str, Message]]:
     for t in _ticks(RADAR_PERIOD_S):
         if t < RADAR_FROM_S:
-            hit = RadarHit(
-                t=t, present=False, moving=False, range_m=0, conf=rng.uniform(0, 0.1)
-            )
+            hit = RadarHit(t=t, present=False, conf=rng.uniform(0, 0.1))
         else:
             ramp = min((t - RADAR_FROM_S) / 15, 1.0)
             breathing = t >= BREATHING_FROM_S
@@ -184,12 +182,14 @@ def script(rng: random.Random) -> list[tuple[str, Message]]:
 
 
 def play(events: list[tuple[str, Message]], speed: float) -> None:
+    """Paced by the monotonic clock, so setting the system clock mid-run can't
+    stall or rush the scenario."""
     with Publisher("fake_detections") as pub:
-        start = time.time()
+        start_wall, start_mono = time.time(), time.monotonic()
         for topic, msg in events:
-            at = start + msg.t / speed
-            time.sleep(max(0.0, at - time.time()))
-            pub.publish(topic, msg.model_copy(update={"t": at}))
+            offset = msg.t / speed
+            time.sleep(max(0.0, start_mono + offset - time.monotonic()))
+            pub.publish(topic, msg.model_copy(update={"t": start_wall + offset}))
 
 
 def main() -> None:
@@ -199,6 +199,8 @@ def main() -> None:
     )
     parser.add_argument("--seed", type=int, default=7, help="random seed")
     args = parser.parse_args()
+    if args.speed <= 0:
+        parser.error("--speed must be above 0")
     setup_logging()
     events = script(random.Random(args.seed))
     log.info("playing %d messages over %.0f s", len(events), DURATION_S / args.speed)
