@@ -1,6 +1,9 @@
 """Heartbeats: every long-running module says it is still running, on topic
-health.beat. The command post flags a module that goes quiet or reports itself
-degraded, so a dead sensor never looks like "no victim here".
+health.beat. A module that goes quiet or reports itself degraded must be
+flagged to the operator, so a dead sensor never looks like "no victim here".
+Heartbeats live on the node bus only; getting them to the command post needs
+the status beacon over LoRa (TODO.md). Beats can arrive up to about 2 x beat_s
+apart, so anything that watches for silence must allow for that.
 
     heart = Heart(pub, sim=args.sim)
     while True:

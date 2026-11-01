@@ -98,6 +98,13 @@ class PrivacyConfig(Section):
 
 class TargetsConfig(Section):
     devices: list[DeviceHash]
+    known_only: bool
+
+    @model_validator(mode="after")
+    def _something_to_find(self) -> Self:
+        if self.known_only and not self.devices:
+            raise ValueError("known_only needs at least one target device")
+        return self
 
 
 class RfConfig(Section):
@@ -153,12 +160,14 @@ class TracksConfig(Section):
     bearing_merge_deg: float = Field(gt=0, le=180)
     window_s: PositiveFloat
     focus_s: PositiveFloat
+    radar_merge_m: PositiveFloat
     confirm_range_m: PositiveFloat
     keep_s: PositiveFloat
     max_tracks: int = Field(gt=0)
     max_devs: int = Field(gt=0)
+    demote_s: PositiveFloat
     resend_s: PositiveFloat
-    id_file: str
+    state_dir: str
 
     @model_validator(mode="after")
     def _ordered(self) -> Self:
@@ -233,6 +242,22 @@ class Config(Section):
         n = self.privacy.hash_chars
         if any(len(dev) != n for dev in self.targets.devices):
             raise ValueError(f"every target hash must be {n} characters (hash_chars)")
+        return self
+
+    @model_validator(mode="after")
+    def _markers_stay_fresh(self) -> Self:
+        # A P1 marker must be resent before TAK greys it out.
+        if self.tracks.resend_s >= self.tak.stale_s:
+            raise ValueError("tracks.resend_s must be under tak.stale_s")
+        return self
+
+    @model_validator(mode="after")
+    def _state_outlives_logs(self) -> Self:
+        # Clearing recordings must not reset track ids.
+        state = (REPO_ROOT / self.tracks.state_dir).resolve()
+        logs = (REPO_ROOT / self.log.dir).resolve()
+        if state == logs or logs in state.parents:
+            raise ValueError("tracks.state_dir must not be inside log.dir")
         return self
 
 

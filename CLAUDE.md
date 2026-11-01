@@ -104,10 +104,13 @@ Triage:
 
 Tracks (full rules in `fuse/tracks.py`):
 
+- With `targets.known_only: true` (demo and testing), fusion ignores every device not in `targets.devices`, so bystanders' phones can't flood the link or lend their signal to a heat pack. Set it false for a real search.
 - A device hit joins the track holding its device hash. A hit with a bearing joins a track seen within 20° in the last 30 s.
-- Thermal and radar share a bracket and look at one thing at a time. A radar hit (no bearing) joins whatever they saw in the last 5 s. When they find someone new, that person joins the device track the searcher was closing in on: heard in the last 30 s, estimated within 8 m, known target devices first, then the strongest signal.
-- Each sensor's evidence on a track is the strongest it has given, so confidence never drops because the searcher walked away. Bearing and range are relative to the searcher, so they become unknown (`None`) after 30 s.
-- Track ids never repeat, even across restarts (saved in `logs/next_track_id`), because the command post keys markers by id.
+- Thermal and radar share a bracket and look at one thing at a time. A radar hit (no bearing) joins the track the radar saw in the last 5 s at a range within 1.5 m; failing that, whatever the camera last saw, if the radar has nothing recent on it. Someone at another range is someone else.
+- When they find someone new, that person joins the device track the searcher was closing in on: heard in the last 30 s, estimated within 8 m, nobody confirmed on it yet, known target devices first, then the strongest signal. Two people never share a marker; a duplicate marker is the lesser evil.
+- Each sensor's evidence on a track is the strongest it has given, so confidence never drops because the searcher walked away. Bearing, range and breathing rate go stale and become unknown (`None`) after 30 s; the last radar reading still decides "not moving", so a victim left behind stays P1.
+- Priority rises at once but drops only after the lower priority has held for 10 s, so a flickering radar can't flip the marker every second.
+- Track ids never repeat, and confirmed tracks survive a restart or reboot, both saved in `state/` (not `logs/`, so clearing recordings can't reset ids). The command post keys markers by id.
 
 Fusion publishes `fuse.target` when a track is created, when its priority changes, and every 30 s for P1/P2.
 

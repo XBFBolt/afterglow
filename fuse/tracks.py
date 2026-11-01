@@ -9,54 +9,88 @@ Which track a hit joins (windows and limits from config.yaml, tracks section):
 2. A hit with a bearing joins the track seen at the nearest bearing within
    bearing_merge_deg, if that bearing is under window_s old.
 3. The thermal camera and radar share a bracket and look at one thing at a
-   time. Radar gives no bearing, so a radar hit joins the track they last saw,
-   if under focus_s ago. So does a thermal hit, if that track has no bearing yet.
+   time. Radar gives no bearing but does give range, so a radar hit joins the
+   track the radar saw under focus_s ago at the nearest range within
+   radar_merge_m. Failing that, it joins the track the camera or radar last
+   saw (the focus, under focus_s ago) if the radar has nothing recent on it:
+   someone at another range is someone else. A thermal hit joins the focus
+   too, if the focus has no recent bearing.
 4. When they find someone not yet tracked, that person joins the device track
    the searcher was closing in on: a device heard in the last window_s and
-   estimated within confirm_range_m, on a track with no recent bearing of its
-   own. Known target devices come first, then the strongest signal.
+   estimated within confirm_range_m, on a track nobody has been confirmed on
+   yet. Known target devices come first, then the strongest signal. Two people
+   must never share one marker; a duplicate marker is the lesser evil.
 5. Anything else starts a new track.
 
 Each track keeps the strongest evidence each sensor has given it, so confidence
 never drops because the searcher walked away or looked elsewhere: a person
-confirmed ten minutes ago is still there. Bearing and range are relative to the
-searcher, so fusion reports them only while under window_s old. "Recent" means
+confirmed ten minutes ago is still there. Bearing, range and breathing rate go
+stale, so fusion reports them only while under window_s old. "Recent" means
 within that many seconds either way (see within()), so a clock set backwards
 mid-search can't make old readings look fresh.
 
 Bounded: device-only tracks are forgotten after keep_s unheard, each track
-remembers at most max_devs device hashes, and past max_tracks the least urgent,
-longest-quiet track is dropped.
+remembers at most max_devs device hashes, and past max_tracks one is dropped:
+unconfirmed before confirmed, then unknown devices before known targets, then
+the least urgent, then the longest quiet.
 """
 
 import math
 from collections.abc import Collection
 from dataclasses import dataclass, field
+from typing import Annotated
+
+from pydantic import ConfigDict, Field
 
 from common.config import TracksConfig
-from common.schema import Hazard, HazardReading, RadarHit, RfHit, ThermalHit
+from common.schema import (
+    T_MAX,
+    Bearing,
+    BleHit,
+    BreathRate,
+    Hazard,
+    HazardReading,
+    Priority,
+    RadarHit,
+    RfHit,
+    Score,
+    ThermalHit,
+    WifiHit,
+)
+
+# A time, or -inf for "never". NaN fails both bounds, so a garbled saved track
+# can't stall resends with a time that compares false to everything.
+Time = Annotated[float, Field(ge=-math.inf, le=T_MAX)]
 
 
 @dataclass(eq=False)
 class Track:
-    """One probable person. Fusion reads it to build a Target."""
+    """One probable person. Fusion reads it to build a Target and saves the
+    confirmed ones so they survive a restart. The annotations are checked when
+    a saved track is loaded (pydantic), not when the tracker updates it."""
 
-    id: int
-    last_t: float  # newest hit of any kind
-    rf: dict[str, RfHit] = field(default_factory=dict)  # newest hit per device hash
-    bearing_deg: float | None = None
-    bearing_t: float = -math.inf  # when bearing_deg was measured
-    confirm_t: float = -math.inf  # newest thermal or radar hit
+    __pydantic_config__ = ConfigDict(ser_json_inf_nan="constants", extra="forbid")
+
+    id: Annotated[int, Field(ge=0)]
+    last_t: Time  # newest hit of any kind
+    rf: dict[str, WifiHit | BleHit] = field(default_factory=dict)  # newest per device
+    bearing_deg: Bearing | None = None
+    bearing_t: Time = -math.inf  # when bearing_deg was measured
+    confirm_t: Time = -math.inf  # newest thermal or radar hit
     radar: RadarHit | None = None  # newest radar hit that saw someone
+    breaths_per_min: BreathRate | None = None  # newest measured breathing rate
+    breaths_t: Time = -math.inf
     hazard: Hazard | None = None  # gas reading taken at this track; None: none taken
     # Strongest evidence so far from each sensor; None: nothing from it yet.
-    e_rf: float | None = None
-    e_thermal: float | None = None
-    e_radar: float | None = None
-    # Kept by fusion: current priority, and what it last published and when.
-    priority: int = 4
-    sent_priority: int | None = None
-    sent_t: float = -math.inf
+    e_rf: Score | None = None
+    e_thermal: Score | None = None
+    e_radar: Score | None = None
+    # Kept by fusion: the priority it reports, when a lower one was first
+    # scored (it must hold for demote_s), and what it last published and when.
+    priority: Priority = 4
+    demote_since: Time | None = None
+    sent_priority: Priority | None = None
+    sent_t: Time = -math.inf
 
     @property
     def alive(self) -> bool:
@@ -123,10 +157,17 @@ class Tracker:
 
     def add_radar(self, hit: RadarHit, e: float) -> Track:
         """A radar hit that saw someone present, with its e."""
-        track = self._focus(hit.t) or self._homing(hit.t) or self._new(hit.t)
+        track = (
+            self._by_radar_range(hit)
+            or self._focus_without_radar(hit.t)
+            or self._homing(hit.t)
+            or self._new(hit.t)
+        )
         self._confirm(track, hit.t)
         if track.radar is None or hit.t >= track.radar.t:
             track.radar = hit
+        if hit.breaths_per_min is not None and hit.t >= track.breaths_t:
+            track.breaths_per_min, track.breaths_t = hit.breaths_per_min, hit.t
         track.e_radar = _peak(track.e_radar, e)
         return track
 
@@ -150,15 +191,28 @@ class Tracker:
         for track_id in stale:
             del self.tracks[track_id]
 
+    def restore(self, tracks: Collection[Track]) -> None:
+        """Take back tracks saved before a restart, most urgent first, up to
+        max_tracks. New ids carry on past every restored one."""
+        ranked = sorted(tracks, key=lambda tr: (tr.priority, -tr.last_t))
+        for track in ranked[: self.cfg.max_tracks]:
+            self.tracks[track.id] = track
+            self.next_id = max(self.next_id, track.id + 1)
+
     def _new(self, t: float) -> Track:
         if len(self.tracks) >= self.cfg.max_tracks:
-            drop = max(self.tracks.values(), key=lambda tr: (tr.priority, -tr.last_t))
+            drop = max(self.tracks.values(), key=self._expendable)
             del self.tracks[drop.id]
             self.evicted += 1
         track = Track(id=self.next_id, last_t=t)
         self.next_id += 1
         self.tracks[track.id] = track
         return track
+
+    def _expendable(self, track: Track) -> tuple[bool, bool, int, float]:
+        """Sort key; the highest is dropped first when max_tracks is reached."""
+        known = not self.known.isdisjoint(track.rf)
+        return (not track.alive, not known, track.priority, -track.last_t)
 
     def _by_dev(self, dev: str) -> Track | None:
         return next((tr for tr in self.tracks.values() if dev in tr.rf), None)
@@ -190,11 +244,34 @@ class Tracker:
         track = self._focus(t)
         return None if track is None or self._has_bearing(track, t) else track
 
+    def _has_radar(self, track: Track, t: float) -> bool:
+        """The radar saw someone on track under focus_s ago."""
+        radar = track.radar
+        return radar is not None and within(t, radar.t, self.cfg.focus_s)
+
+    def _by_radar_range(self, hit: RadarHit) -> Track | None:
+        """The track the radar saw recently at the nearest range within
+        radar_merge_m (rule 3)."""
+        best, best_gap = None, self.cfg.radar_merge_m
+        for track in self.tracks.values():
+            if track.radar is None or not self._has_radar(track, hit.t):
+                continue
+            if hit.range_m is None or track.radar.range_m is None:
+                continue  # can't happen for a present hit; the schema requires range
+            gap = abs(hit.range_m - track.radar.range_m)
+            if gap <= best_gap:
+                best, best_gap = track, gap
+        return best
+
+    def _focus_without_radar(self, t: float) -> Track | None:
+        track = self._focus(t)
+        return None if track is None or self._has_radar(track, t) else track
+
     def _homing(self, t: float) -> Track | None:
         """The device track the searcher was closing in on (rule 4)."""
         best, best_key = None, None
         for track in self.tracks.values():
-            if self._has_bearing(track, t):
+            if track.alive or self._has_bearing(track, t):
                 continue
             near = [
                 hit

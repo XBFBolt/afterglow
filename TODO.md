@@ -38,6 +38,9 @@ Fake scenario → fusion → relay queue → LoRa (sim) → receiver → web map
 - [x] `find/rssi_filter.py`: smoothing, log-distance range estimate, `e_rf` mapping (−60 dBm → 1, −90 dBm → 0) + tests
 - [x] `fuse/tracks.py`: merge hits by device hash, or bearing within 20° seen in the last 30 s + tests
 - [x] `fuse/fusion.py`: noisy-OR confidence, P1–P4 triage, send rules (new track, priority change, every 30 s for P1/P2) + tests
+- [ ] Decide the bearing reference before the relay and thermal work: compass bearings (fit the IMU), or camera-relative (merge window down to about `focus_s`, and `brg` not sent over the air, since it means nothing to the operator)
+- [ ] Decide what to do when the victim's own phone reads past `tracks.confirm_range_m` (body loss: a phone under the victim can read 9 m away); today the person and the phone become two markers
+- [ ] Status beacon over LoRa, designed before the codec: modules-up bitmask + sequence number every N s, doubling as the link keepalive, so the post can tell "no victims" from "link dead"; its quiet threshold must allow for beats up to 2 × `health.beat_s` apart
 - [ ] `relay/codec.py`: `Alert` to and from compact bytes, under 100 bytes + tests (a full alert as compact JSON is already 99 bytes with small numbers: drop empty fields or struct-pack)
 - [ ] `relay/priority_queue.py`: priority then age, newer alert replaces queued older one, back-off retry after 10 s without ack, P1 never blocked + tests
 - [ ] `relay/lora_tx.py` and `relay/lora_rx.py` with a sim radio that can drop and restore the link

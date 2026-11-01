@@ -47,12 +47,14 @@ def thermal(t: float, bearing: float, conf: float = 0.9) -> ThermalHit:
     return ThermalHit(t=t, person=True, conf=conf, bearing_deg=bearing, max_temp_c=34)
 
 
-def radar(t: float, moving: bool = False, breaths: float | None = None) -> RadarHit:
+def radar(
+    t: float, moving: bool = False, breaths: float | None = None, rng: float = 2.0
+) -> RadarHit:
     return RadarHit(
         t=t,
         present=True,
         moving=moving,
-        range_m=2.0,
+        range_m=rng,
         breaths_per_min=breaths,
         conf=0.8,
     )
@@ -223,3 +225,66 @@ def test_ids_start_where_told() -> None:
     tr = Tracker(_cfg(), known=[], next_id=500)
     assert tr.add_rf(ble(PHONE, 0), 0.1).id == 500
     assert tr.next_id == 501
+
+
+# Regressions from the fusion review
+
+
+def test_radar_at_another_range_is_someone_else() -> None:
+    # Probe 2: the radar refreshed its own focus, so a mover at 6 m landed on
+    # a still victim at 2 m.
+    tr = _tracker()
+    victim = tr.add_thermal(thermal(0, 40), 0.9)
+    tr.add_radar(radar(1, breaths=14), 1.0)
+    mover = tr.add_radar(radar(2, moving=True, rng=6.0), 0.8)
+    assert mover is not victim
+    assert victim.radar is not None and victim.radar.moving is False
+
+
+def test_radar_switching_between_two_people_keeps_two_tracks() -> None:
+    tr = _tracker()
+    victim = tr.add_thermal(thermal(0, 40), 0.9)
+    tr.add_radar(radar(1, rng=2.0), 0.8)
+    mover = tr.add_radar(radar(2, moving=True, rng=6.0), 0.8)
+    for t in range(3, 20):
+        tr.add_thermal(thermal(t, 40), 0.9)  # camera stays on the victim
+        assert tr.add_radar(radar(t, rng=2.1 if t % 2 else 5.8), 0.8) is (
+            victim if t % 2 else mover
+        )
+    assert len(tr.tracks) == 2
+
+
+def test_a_second_person_is_never_hidden_inside_a_confirmed_track() -> None:
+    # Probe 4: once the victim's bearing went stale, a person at 200 degrees
+    # 40 s later joined the victim's phone track: one marker for two people.
+    tr = _tracker()
+    victim = tr.add_rf(ble(KNOWN, 0, rng=3), 1.0)
+    assert tr.add_thermal(thermal(1, 40), 0.9) is victim
+    tr.add_rf(ble(KNOWN, 40, rng=3), 1.0)  # phone still heard nearby
+    assert tr.add_thermal(thermal(41, 200), 0.9) is not victim
+    assert tr.add_radar(radar(60, rng=4.0), 0.8) is not victim
+
+
+def test_a_known_device_outlasts_strangers_when_tracks_run_out() -> None:
+    # Review: a quiet P4 track holding the target phone was dropped first.
+    tr = _tracker(max_tracks=2)
+    target = tr.add_rf(ble(KNOWN, 0), 0.1)  # oldest, quiet, P4
+    stranger = tr.add_rf(ble(PHONE, 1), 0.1)
+    tr.add_rf(ble(OTHER, 2), 0.1)
+    assert target.id in tr.tracks and stranger.id not in tr.tracks
+
+
+def test_confirmed_tracks_outlast_device_only_ones() -> None:
+    tr = _tracker(max_tracks=2)
+    person = tr.add_thermal(thermal(0, 40), 0.9)  # oldest
+    target_phone = tr.add_rf(ble(KNOWN, 1, rng=20), 0.1)
+    tr.add_rf(ble(PHONE, 2), 0.1)
+    assert person.id in tr.tracks and target_phone.id not in tr.tracks
+
+
+def test_restored_tracks_move_ids_on_and_respect_max_tracks() -> None:
+    old = _tracker()
+    saved = [old.add_thermal(thermal(t, t * 30), 0.9) for t in range(5)]
+    tr = Tracker(_cfg(max_tracks=3), known=[KNOWN])
+    tr.restore(saved)
+    assert len(tr.tracks) == 3 and tr.next_id == 6

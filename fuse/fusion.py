@@ -20,10 +20,16 @@ Triage:
     P3  C >= possible
     P4  below possible
 
-"Not moving" needs the radar to say so: unknown is not "still".
+"Not moving" needs the radar to say so: unknown is not "still". A track's
+priority rises at once but drops only once the lower one has held for
+demote_s, so a flickering sensor can't flip the marker every second.
 
 Send rules: a track's Target is published when the track is new, when its
 priority changes, and every resend_s while it is P1 or P2.
+
+With targets.known_only (demo and testing), devices not in targets.devices
+are ignored, so bystanders' phones neither flood the link nor lend their
+signal to a heat pack.
 
 Run with: python -m fuse.fusion
 """
@@ -35,6 +41,8 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+from pydantic import TypeAdapter
 
 from common.bus import Publisher, Subscriber
 from common.config import (
@@ -95,14 +103,16 @@ def radar_evidence(hit: RadarHit, cfg: FusionConfig) -> float:
 
 
 def to_target(track: Track, now: float, cfg: Config) -> Target:
-    """The track as a Target at time now. Bearing and range older than
-    window_s are unknown (None); vitals and hazard are the last measured."""
+    """The track as a Target at time now, with its priority as scored right
+    now. Bearing, range and breathing rate older than window_s are unknown
+    (None). Movement and hazard are the last measured, so a victim the searcher
+    has left stays as urgent as they were."""
     window_s = cfg.tracks.window_s
     evidence = Evidence(rf=track.e_rf, thermal=track.e_thermal, radar=track.e_radar)
     c = confidence(evidence, cfg.fusion.weights)
-    radar = track.radar
-    moving = radar.moving if radar else None
+    moving = track.radar.moving if track.radar else None
     recent_bearing = within(now, track.bearing_t, window_s)
+    recent_breaths = within(now, track.breaths_t, window_s)
     return Target(
         t=now,
         id=track.id,
@@ -111,7 +121,7 @@ def to_target(track: Track, now: float, cfg: Config) -> Target:
         alive=track.alive,
         bearing_deg=track.bearing_deg if recent_bearing else None,
         range_m=_range_m(track, now, window_s),
-        breaths_per_min=radar.breaths_per_min if radar else None,
+        breaths_per_min=track.breaths_per_min if recent_breaths else None,
         hazard=track.hazard,
         evidence=evidence,
     )
@@ -133,29 +143,51 @@ def on_message(tracker: Tracker, msg: Message, now: float, cfg: Config) -> list[
     track = _apply(tracker, msg, cfg)
     if track is None:
         return []
-    target = to_target(track, now, cfg)
-    track.priority = target.priority
+    target = _refresh(track, now, cfg)
     if target.priority == track.sent_priority:
         return []
     return [_sent(track, target)]
 
 
 def due(tracker: Tracker, now: float, cfg: Config) -> list[Target]:
-    """Periodic resends: every P1 and P2 track not sent in the last resend_s.
-    Elapsed time counts either way, so a clock set backwards can't stall them."""
-    return [
-        _sent(track, to_target(track, now, cfg))
-        for track in tracker.tracks.values()
-        if track.priority <= 2 and abs(now - track.sent_t) >= cfg.tracks.resend_s
-    ]
+    """Targets owed on a timer: a drop in priority that has now held for
+    demote_s, and every P1 and P2 not sent in the last resend_s. Elapsed time
+    counts either way, so a clock set backwards can't stall them."""
+    out = []
+    for track in tracker.tracks.values():
+        resend = track.priority <= 2 and abs(now - track.sent_t) >= cfg.tracks.resend_s
+        if not resend and track.demote_since is None:
+            continue
+        target = _refresh(track, now, cfg)
+        if resend or target.priority != track.sent_priority:
+            out.append(_sent(track, target))
+    return out
+
+
+def _refresh(track: Track, now: float, cfg: Config) -> Target:
+    """The track's Target now, at the priority it reports: a more urgent one is
+    taken at once, a less urgent one only after it has held for demote_s, so a
+    flickering sensor can't flip the marker every second."""
+    target = to_target(track, now, cfg)
+    scored = target.priority
+    if scored <= track.priority:
+        track.priority, track.demote_since = scored, None
+    elif track.demote_since is None:
+        track.demote_since = now
+    elif abs(now - track.demote_since) >= cfg.tracks.demote_s:
+        track.priority, track.demote_since = scored, None
+    return target.model_copy(update={"priority": track.priority})
 
 
 def _apply(tracker: Tracker, msg: Message, cfg: Config) -> Track | None:
-    """Hand a message to the tracker. A thermal hit with no person or a radar
-    hit with nobody present is not evidence of absence (the sensors may just
-    be pointed elsewhere), so it is skipped."""
+    """Hand a message to the tracker. With targets.known_only, a device not in
+    targets.devices is ignored. A thermal hit with no person or a radar hit
+    with nobody present is not evidence of absence (the sensors may just be
+    pointed elsewhere), so it is skipped."""
     match msg:
         case RfHit():
+            if cfg.targets.known_only and msg.dev not in tracker.known:
+                return None
             return tracker.add_rf(msg, e_rf(msg.rssi_smooth, cfg.rf))
         case ThermalHit(person=True):
             return tracker.add_thermal(msg, msg.conf)
@@ -172,36 +204,83 @@ def _sent(track: Track, target: Target) -> Target:
     return target
 
 
-# I/O below: track-id file, bus loop, entry point.
+# I/O below: saved state, bus loop, entry point. Fusion's state lives in
+# tracks.state_dir so it survives restarts and reboots: the next track id
+# (the command post keys markers by id, so ids must never repeat) and every
+# confirmed track (so P1s keep being resent after a power cut).
+
+ID_EPOCH = 1_767_225_600  # 2026-01-01 00:00 UTC
+TRACKS_JSON = TypeAdapter(list[Track])
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    """Replace path with data durably: after a power cut it holds the old data
+    or the new, never a mix. Raises OSError."""
+    tmp = path.with_name(path.name + ".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tmp.open("wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    folder = os.open(path.parent, os.O_RDONLY)  # make the rename itself durable
+    try:
+        os.fsync(folder)
+    finally:
+        os.close(folder)
 
 
 def load_next_id(path: Path) -> int:
-    """The first track id this run may use. The command post keys markers by
-    track id, so ids must never repeat, even after a crash or power cut."""
+    """The first track id this run may use: 1 on a fresh install."""
     try:
         return max(int(path.read_text()), 1)
     except FileNotFoundError:
         return 1
     except (OSError, ValueError) as exc:
-        # Which ids were used is unknown: jump past any count a run could reach.
+        # Which ids were used is unknown. Minutes since 2026 only grow, and a
+        # run would need over one new track a minute ever since to have passed
+        # them; restored confirmed tracks push ids past their own as well. Six
+        # digits, not ten, because every byte counts in a LoRa alert.
         log.error("can't read %s (%s); starting track ids from the clock", path, exc)
-        return int(time.time())
+        return max((int(time.time()) - ID_EPOCH) // 60, 1)
 
 
 def save_next_id(path: Path, next_id: int) -> None:
-    """Record, atomically and durably, that ids below next_id may be in use.
-    Logs a failure instead of raising: ids stay unique within this run."""
-    tmp = path.with_name(path.name + ".tmp")
+    """Record that ids below next_id may be in use. Logs a failure instead of
+    raising: ids stay unique within this run."""
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with tmp.open("w") as f:
-            f.write(f"{next_id}\n")
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
+        _write_atomic(path, f"{next_id}\n".encode())
     except OSError as exc:
         log.error(
             "can't save track ids to %s (%s): ids may repeat after a restart", path, exc
+        )
+
+
+def load_tracks(path: Path) -> list[Track]:
+    """Confirmed tracks saved by the last run; none if there is no file or it
+    doesn't pass validation (logged), so a bad file can't stop fusion."""
+    try:
+        return TRACKS_JSON.validate_json(path.read_bytes())
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as exc:
+        # The error type only: the detail could quote a garbled file at length.
+        log.error(
+            "can't load saved tracks from %s (%s); starting without them",
+            path,
+            type(exc).__name__,
+        )
+        return []
+
+
+def save_tracks(path: Path, tracker: Tracker) -> None:
+    """Save every confirmed track. Logs a failure instead of raising."""
+    confirmed = [track for track in tracker.tracks.values() if track.alive]
+    try:
+        _write_atomic(path, TRACKS_JSON.dump_json(confirmed))
+    except OSError as exc:
+        log.error(
+            "can't save tracks to %s (%s): a restart would forget them", path, exc
         )
 
 
@@ -210,8 +289,10 @@ class State:
     """What fusion keeps across loop restarts, so a crash in the loop neither
     forgets victims nor reuses track ids."""
 
+    cfg: Config
     tracker: Tracker
     id_file: Path
+    tracks_file: Path
     reserved_id: int = 0  # every id below this is saved as possibly in use
     skewed: int = 0  # messages dropped for a bad timestamp, not yet reported
     skewed_src: str = ""
@@ -220,9 +301,16 @@ class State:
 
 
 def new_state(cfg: Config) -> State:
-    id_file = REPO_ROOT / cfg.tracks.id_file
-    tracker = Tracker(cfg.tracks, cfg.targets.devices, load_next_id(id_file))
-    state = State(tracker, id_file)
+    """Fusion's state, picking up the saved ids and confirmed tracks."""
+    folder = REPO_ROOT / cfg.tracks.state_dir
+    id_file = folder / "next_track_id"
+    state = State(
+        cfg,
+        Tracker(cfg.tracks, cfg.targets.devices, load_next_id(id_file)),
+        id_file=id_file,
+        tracks_file=folder / "tracks.json",
+    )
+    state.tracker.restore(load_tracks(state.tracks_file))
     _reserve_ids(state)
     return state
 
@@ -237,7 +325,7 @@ def _reserve_ids(state: State) -> None:
 def step(sub: Subscriber, pub: Publisher, state: State) -> None:
     """One pass of the loop: take at most one message, publish what the send
     rules call for. Returns within health.beat_s."""
-    cfg = get_config()
+    cfg = state.cfg
     got = sub.recv(timeout_s=cfg.health.beat_s)
     now = time.time()
     targets: list[Target] = []
@@ -251,6 +339,8 @@ def step(sub: Subscriber, pub: Publisher, state: State) -> None:
     targets += due(state.tracker, now, cfg)
     state.tracker.prune(now)
     _reserve_ids(state)  # before publishing, so no published id goes unsaved
+    if any(target.alive for target in targets):  # a confirmed track changed
+        save_tracks(state.tracks_file, state.tracker)
     for target in targets:
         pub.publish("fuse.target", target)
     _report(state)
@@ -262,7 +352,7 @@ def _report(state: State) -> None:
     now = time.monotonic()
     if not (state.skewed or evicted):
         return
-    if now - state.last_report < get_config().bus.bad_msg_log_s:
+    if now - state.last_report < state.cfg.bus.bad_msg_log_s:
         return
     if state.skewed:
         log.warning(
@@ -282,7 +372,7 @@ def run(state: State) -> None:
     """The fusion loop. Sockets open fresh on each (re)start; tracks in state
     survive a crash."""
     with Subscriber(INPUTS) as sub, Publisher("fusion") as pub:
-        heart = Heart(pub, sim=get_config().sim)
+        heart = Heart(pub, sim=state.cfg.sim)
         while True:
             step(sub, pub, state)
             heart.beat()
@@ -292,7 +382,11 @@ def main() -> None:
     argparse.ArgumentParser(description="Fuse sensor hits into targets.").parse_args()
     setup_logging()
     state = new_state(get_config())
-    log.info("fusion up; next track id %d", state.tracker.next_id)
+    log.info(
+        "fusion up; %d confirmed track(s) restored; next track id %d",
+        len(state.tracker.tracks),
+        state.tracker.next_id,
+    )
     run_forever("fusion", lambda: run(state))
 
 

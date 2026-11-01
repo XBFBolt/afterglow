@@ -18,12 +18,13 @@ import logging
 import math
 import random
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 
 from common.bus import Publisher
 from common.config import get_config, setup_logging
 from common.ids import hash_device
 from common.schema import BleHit, HazardReading, Message, RadarHit, ThermalHit, WifiHit
+from find.rssi_filter import Smoother, est_range_m
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +48,6 @@ RADAR_PERIOD_S = 1.0
 GAS_PERIOD_S = 1.0
 GAS_BASELINE = 180
 RSSI_NOISE_DB = 4.0
-SMOOTHING = 0.3  # weight of the newest reading in the fake RSSI smoother
 
 
 def searcher_range_m(t: float) -> float:
@@ -69,43 +69,48 @@ def _rssi(range_m: float, rng: random.Random) -> float:
     return clean + rng.gauss(0, RSSI_NOISE_DB)
 
 
-def _rf_stream(
-    range_at: Callable[[float], float], period_s: float, rng: random.Random
-) -> Iterator[tuple[float, float, float, float]]:
-    """(t, rssi, smoothed rssi, estimated range) for one device."""
-    smooth = None
-    for t in _ticks(period_s):
-        rssi = _rssi(range_at(t), rng)
-        smooth = rssi if smooth is None else smooth + SMOOTHING * (rssi - smooth)
-        yield t, rssi, smooth, range_at(t) * rng.uniform(0.8, 1.25)
-
-
 def _ble(rng: random.Random) -> Iterator[tuple[str, Message]]:
+    # Smoothed and ranged by the same code the real scanners use.
+    rf = get_config().rf
+    smoother = Smoother(rf)
     for mac, range_at in (
         (VICTIM_MAC, searcher_range_m),
         (BYSTANDER_MAC, lambda t: BYSTANDER_RANGE_M),
     ):
         dev = hash_device(mac)
-        for t, rssi, smooth, est in _rf_stream(range_at, BLE_PERIOD_S, rng):
-            hit = BleHit(
-                t=t, dev=dev, rssi_dbm=rssi, rssi_smooth=smooth, est_range_m=est
+        for t in _ticks(BLE_PERIOD_S):
+            rssi = _rssi(range_at(t), rng)
+            smooth = smoother.add(dev, t, rssi)
+            yield (
+                "find.ble",
+                BleHit(
+                    t=t,
+                    dev=dev,
+                    rssi_dbm=rssi,
+                    rssi_smooth=smooth,
+                    est_range_m=est_range_m(smooth, rf),
+                ),
             )
-            yield "find.ble", hit
 
 
 def _wifi(rng: random.Random) -> Iterator[tuple[str, Message]]:
+    rf = get_config().rf
+    smoother = Smoother(rf)  # the Wi-Fi sniffer is its own process, its own smoother
     dev = hash_device(VICTIM_MAC)
     channels = get_config().wifi.channels
-    for t, rssi, smooth, est in _rf_stream(searcher_range_m, WIFI_BURST_PERIOD_S, rng):
+    for burst_t in _ticks(WIFI_BURST_PERIOD_S):
         for i, channel in enumerate(channels):
+            t = burst_t + 0.05 * i
+            rssi = _rssi(searcher_range_m(t), rng)
+            smooth = smoother.add(dev, t, rssi)
             yield (
                 "find.wifi",
                 WifiHit(
-                    t=t + 0.05 * i,
+                    t=t,
                     dev=dev,
-                    rssi_dbm=rssi + rng.gauss(0, 1),
+                    rssi_dbm=rssi,
                     rssi_smooth=smooth,
-                    est_range_m=est,
+                    est_range_m=est_range_m(smooth, rf),
                     channel=channel,
                 ),
             )

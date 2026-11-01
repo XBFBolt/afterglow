@@ -32,6 +32,11 @@ targets:
   # Changing the salt or hash_chars changes every hash: re-hash these too.
   devices:
     - 2efae4bfcede1097   # fake scenario victim phone (tools/fake_detections.py)
+  # true: fusion ignores every device not listed above (demo and testing: only
+  # our own devices, and bystanders' phones can't flood the link or lend their
+  # signal to a heat pack). false for a real search, where the victim's device
+  # isn't known in advance.
+  known_only: true
 
 rf:
   p1m_dbm: -45           # RSSI at 1 m; calibrate on site
@@ -56,12 +61,16 @@ tracks:
   bearing_merge_deg: 20  # merge hits whose bearings are this close...
   window_s: 30           # ...and were seen within this window; older bearings and ranges are unknown
   focus_s: 5             # thermal/radar hits this recent mean the searcher is at that track
+  radar_merge_m: 1.5     # a radar hit joins a track only if this close to its last radar range
   confirm_range_m: 8     # a newly confirmed person joins a device estimated this close
   keep_s: 600            # forget a device-only track after this long unheard (confirmed tracks stay)
-  max_tracks: 256        # when full, the least urgent, longest-quiet track is dropped
+  max_tracks: 256        # when full, unconfirmed tracks without a known device go first
   max_devs: 16           # device hashes remembered per track
-  resend_s: 30           # resend P1/P2 alerts this often
-  id_file: logs/next_track_id  # track ids never repeat, even across restarts
+  demote_s: 10           # priority rises at once, but drops only after the lower one holds this long
+  resend_s: 30           # resend P1/P2 alerts this often; must be under tak.stale_s
+  # Track ids and confirmed tracks survive restarts here. Not under logs/, so
+  # clearing recordings can't reset ids and overwrite markers at the command post.
+  state_dir: state
 
 health:
   beat_s: 2              # every long-running module publishes a heartbeat this often

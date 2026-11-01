@@ -53,6 +53,11 @@ def _drop(section: str) -> Callable[[dict], None]:
         _set("tracks.keep_s", 10),  # shorter than window_s
         _set("tracks.max_tracks", 0),
         _set("health.beat_s", 0),
+        _set("targets.devices", []),  # known_only with nothing to find
+        _set("tracks.resend_s", 120),  # P1 markers would go stale between resends
+        _set("tracks.state_dir", "logs/state"),  # clearing logs would reset ids
+        _set("tracks.state_dir", "logs"),
+        _set("tracks.demote_s", 0),
     ],
 )
 def test_bad_config_fails_at_load(
