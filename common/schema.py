@@ -9,15 +9,17 @@ values, no unknown fields, and device IDs must already be hashed. A value that
 isn't known is None, never a default that looks like a real reading.
 """
 
+import re
 import time
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Score = Annotated[float, Field(ge=0, le=1)]
 Priority = Annotated[int, Field(ge=1, le=4)]  # P1 urgent ... P4 device only
 Bearing = Annotated[float, Field(ge=0, lt=360)]  # degrees clockwise
 Hazard = Literal["none", "caution", "danger"]
+Status = Literal["ok", "degraded"]  # a module's health
 # Output of common.ids.hash_device. At least 16 hex characters, so a raw MAC or
 # BLE address (12 hex digits) can't pass, with or without separators.
 DeviceHash = Annotated[str, Field(pattern=r"^[0-9a-f]{16,64}$")]
@@ -28,6 +30,11 @@ Rssi = Annotated[float, Field(ge=-120, lt=0)]
 WifiChannel = Annotated[int, Field(ge=1, le=14)]  # 2.4 GHz
 BreathRate = Annotated[float, Field(ge=0, le=100)]  # breaths per minute
 T_MAX = 4_102_444_800.0  # 2100-01-01; a later timestamp is a broken clock
+NOTE_MAX = 64  # characters in a Heartbeat note
+# A MAC or BLE address in any common spelling: six hex pairs with one separator
+# style throughout, or twelve hex digits in a row (also inside a longer hex run,
+# so a device hash or a macOS Bluetooth UUID is caught too).
+_MAC_LIKE = re.compile(r"[0-9a-f]{2}([:-]?)(?:[0-9a-f]{2}\1){4}[0-9a-f]{2}", re.I)
 
 # Shared by every model. Errors never echo the rejected value: it could be the
 # very raw MAC the schema just refused, and errors end up in logs.
@@ -158,6 +165,26 @@ class Alert(Message):
         return self
 
 
+class Heartbeat(Message):
+    """A module saying it is still running, sent every health.beat_s by
+    common.health.Heart. A module that stops beating is down; "degraded" means
+    running but blind (sensor unplugged, no frames). Either one must reach the
+    operator, so a dead sensor is never read as "no victim here"."""
+
+    status: Status
+    sim: bool  # running in sim mode: fake hardware or fake data
+    note: str | None = Field(default=None, max_length=NOTE_MAX)  # why, for the operator
+
+    @field_validator("note")
+    @classmethod
+    def _no_device_address(cls, note: str | None) -> str | None:
+        # Free text is the one place a raw MAC could slip out, e.g. a bleak error
+        # message passed straight through.
+        if note is not None and _MAC_LIKE.search(note):
+            raise ValueError("note looks like it holds a device address")
+        return note
+
+
 TOPICS: dict[str, type[Message]] = {
     "find.wifi": WifiHit,
     "find.ble": BleHit,
@@ -167,6 +194,7 @@ TOPICS: dict[str, type[Message]] = {
     "fuse.target": Target,
     "relay.out": Alert,
     "relay.in": Alert,
+    "health.beat": Heartbeat,
 }
 
 

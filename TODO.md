@@ -35,16 +35,17 @@ The software task list. Check items off as they land. The how and why live in [C
 
 Fake scenario → fusion → relay queue → LoRa (sim) → receiver → web map and TAK, on one laptop with no hardware.
 
-- [ ] `find/rssi_filter.py`: smoothing, log-distance range estimate, `e_rf` mapping (−60 dBm → 1, −90 dBm → 0) + tests
-- [ ] `fuse/tracks.py`: merge hits by device hash, or bearing within 20° seen in the last 30 s + tests
-- [ ] `fuse/fusion.py`: noisy-OR confidence, P1–P4 triage, send rules (new track, priority change, every 30 s for P1/P2) + tests
+- [x] `find/rssi_filter.py`: smoothing, log-distance range estimate, `e_rf` mapping (−60 dBm → 1, −90 dBm → 0) + tests
+- [x] `fuse/tracks.py`: merge hits by device hash, or bearing within 20° seen in the last 30 s + tests
+- [x] `fuse/fusion.py`: noisy-OR confidence, P1–P4 triage, send rules (new track, priority change, every 30 s for P1/P2) + tests
 - [ ] `relay/codec.py`: `Alert` to and from compact bytes, under 100 bytes + tests (a full alert as compact JSON is already 99 bytes with small numbers: drop empty fields or struct-pack)
 - [ ] `relay/priority_queue.py`: priority then age, newer alert replaces queued older one, back-off retry after 10 s without ack, P1 never blocked + tests
 - [ ] `relay/lora_tx.py` and `relay/lora_rx.py` with a sim radio that can drop and restore the link
 - [ ] `map/web/`: Flask + Leaflet, markers colored by priority, vitals popup, hazard ring, P1-first side list, "last received" timestamp, x/y floor-plan mode
 - [ ] `map/cot_sender.py`: CoT via pytak, `uid` = `AG-<track id>`, stale after 2 min, searcher as a friendly marker
 - [ ] `tools/replay.py`: replays a `.jsonl` run through the same pipeline
-- [ ] Health: every module publishes a heartbeat; the map flags any sensor or link that has gone quiet (silence must never look like "no victim")
+- [x] `Heartbeat` model on `health.beat` and the `common.health.Heart` helper; fusion beats
+- [ ] Health: every other module publishes a heartbeat (recorder, sensors, relay); the map flags any sensor or link that has gone quiet (silence must never look like "no victim")
 - [ ] Integration test: fake scenario ends with a P1 alert received at the command post
 - [ ] Milestone: `honcho` starts node and post on one laptop and the full scenario plays out on the web map
 

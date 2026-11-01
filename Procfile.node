@@ -2,3 +2,4 @@
 # Start: uv run honcho -f Procfile.node start
 bus: python -m common.bus --bus node
 recorder: python -m common.recorder --bus node
+fusion: python -m fuse.fusion

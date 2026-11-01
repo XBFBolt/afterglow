@@ -34,7 +34,8 @@ Each module is its own small Python process. Sensor modules publish typed JSON m
 
 ```
 common/        bus.py (pub/sub helper + proxy), schema.py (all message models), config.py, config.yaml,
-               ids.py (device-ID hashing), recorder.py (bus → logs/*.jsonl), service.py (crash restart)
+               ids.py (device-ID hashing), recorder.py (bus → logs/*.jsonl), service.py (crash restart),
+               health.py (heartbeats)
 find/          wifi_sniffer.py, ble_scanner.py, rssi_filter.py
 confirm/       thermal.py, person_detect.py, radar.py
 hazard/        arduino/gas_sensor.ino, gas_reader.py
@@ -70,6 +71,7 @@ Bus topics and the model each one carries:
 | `fuse.target` | `Target` | fuse/fusion.py |
 | `relay.out` | `Alert` | relay/lora_tx.py (what was sent) |
 | `relay.in` | `Alert` | relay/lora_rx.py (what was received) |
+| `health.beat` | `Heartbeat` | every long-running module, via `common.health.Heart` |
 
 Key fields (see `schema.py` for the full definitions):
 
@@ -79,6 +81,7 @@ Key fields (see `schema.py` for the full definitions):
 - `HazardReading`: `hazard` ("none" | "caution" | "danger"), `gas_raw` (0–1023), `temp_c | None`
 - `Target`: `id`, `confidence`, `priority` (1–4), `alive`, `bearing_deg`, `range_m`, `breaths_per_min`, `hazard`, `x`, `y` (meters from the start point, if known), `evidence` (`Evidence`: per-sensor e values, `None` for a sensor with nothing on the track)
 - `Alert`: compact keys `v, id, p, c, x, y, brg, rng, alive, br, hz, t`; must encode to at most `relay.max_alert_bytes` (100); unknown values (`br`, `hz`, position) are `None` and left off the air, never sent as 0
+- `Heartbeat`: `status` ("ok" | "degraded": running but blind), `sim`, `note | None` (64 chars; anything shaped like a MAC is rejected). Sent every `health.beat_s` from the module's main loop, never a thread, so a hung loop goes quiet
 
 Bus usage: always go through `common/bus.py` (`Publisher(src)`, `Subscriber(topics)`). Do not open raw ZeroMQ sockets in modules. The proxy runs as its own process and binds local ports defined in `config.yaml`. `Publisher` stamps its `src` on any message that leaves `src` empty. The node and the command post each run their own bus on separate ports (`bus="post"` in code, `--bus post` on the command line), so both can run on one laptop in sim mode.
 
@@ -90,16 +93,23 @@ Fusion is a noisy-OR, not a black box:
 C = 1 - Π (1 - w_i * e_i)   over rf, thermal, radar, audio
 ```
 
-Starting weights: rf 0.5, thermal 0.7, radar 0.7, audio 0.4. `e_rf` is 1 at RSSI ≥ −60 dBm, scaling linearly to 0 at −90 dBm.
+Starting weights: rf 0.5, thermal 0.7, radar 0.7, audio 0.4. `e_rf` is 1 at RSSI ≥ −60 dBm, scaling linearly to 0 at −90 dBm. `e_thermal` is the detector's confidence. `e_radar` is 1 when a breathing rate of 6–30/min is measured, else the module's confidence. A thermal "no person" or radar "nobody present" is not evidence of absence (the sensors may be pointed elsewhere), so fusion skips it.
 
 Triage:
 
-- P1: C ≥ 0.8 and (not moving or hazard = danger)
+- P1: C ≥ 0.8 and (radar says not moving, or hazard = danger); unknown movement is not "still"
 - P2: C ≥ 0.8
 - P3: 0.5 ≤ C < 0.8
 - P4: C < 0.5 (logged, sent only when the link is idle)
 
-Tracks merge hits with the same device hash, or bearing within 20° seen in the last 30 s. Send an alert when a track is created, when its priority changes, or every 30 s for P1/P2.
+Tracks (full rules in `fuse/tracks.py`):
+
+- A device hit joins the track holding its device hash. A hit with a bearing joins a track seen within 20° in the last 30 s.
+- Thermal and radar share a bracket and look at one thing at a time. A radar hit (no bearing) joins whatever they saw in the last 5 s. When they find someone new, that person joins the device track the searcher was closing in on: heard in the last 30 s, estimated within 8 m, known target devices first, then the strongest signal.
+- Each sensor's evidence on a track is the strongest it has given, so confidence never drops because the searcher walked away. Bearing and range are relative to the searcher, so they become unknown (`None`) after 30 s.
+- Track ids never repeat, even across restarts (saved in `logs/next_track_id`), because the command post keys markers by id.
+
+Fusion publishes `fuse.target` when a track is created, when its priority changes, and every 30 s for P1/P2.
 
 Relay queue: ordered by priority then age; retry with back-off if no ack within 10 s; a newer alert for a track replaces any queued older one; a stuck low-priority alert must never block a P1.
 
@@ -166,7 +176,7 @@ Serial device paths and ports belong in `config.yaml`.
 ## Current priorities
 
 1. ~~Phase 0: schema, bus, logger, fake scenario.~~ Done.
-2. Thin end-to-end path: fake scenario → fusion → relay queue → LoRa (sim) → receiver → web map and TAK.
+2. Thin end-to-end path: fake scenario → fusion → relay queue → LoRa (sim) → receiver → web map and TAK. Fusion side done; next is the relay.
 3. Real sensor modules, one at a time, each behind `--sim`.
 4. Stretch only after the above is solid: Hailo person detection, breathing-rate FFT, directional bearing.
 

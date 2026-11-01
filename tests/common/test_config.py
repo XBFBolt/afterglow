@@ -44,6 +44,15 @@ def _drop(section: str) -> Callable[[dict], None]:
         _set("privacy.hash_chars", 20),  # targets were hashed at 16
         _set("wifi.channels", [1, 6, 15]),
         _drop("triage"),
+        _drop("health"),
+        _set("rf.path_loss_n", 0.01),  # would overflow the range estimate
+        _set("rf.p1m_dbm", 45),  # sign dropped
+        _set("rf.max_devices", 0),
+        _set("fusion.breath_min", 40),  # above breath_max
+        _set("tracks.focus_s", 60),  # longer than window_s
+        _set("tracks.keep_s", 10),  # shorter than window_s
+        _set("tracks.max_tracks", 0),
+        _set("health.beat_s", 0),
     ],
 )
 def test_bad_config_fails_at_load(

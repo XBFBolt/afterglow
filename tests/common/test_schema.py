@@ -6,6 +6,7 @@ from common.schema import (
     Alert,
     BleHit,
     HazardReading,
+    Heartbeat,
     Message,
     RadarHit,
     Target,
@@ -50,6 +51,9 @@ SAMPLES: dict[str, Message] = {
         id=7, p=1, c=92, x=12, y=-4, brg=40, rng=2, alive=True, br=14, hz=1
     ),
     "relay.in": Alert(id=7, p=1, c=92, alive=True),
+    "health.beat": Heartbeat(
+        status="degraded", sim=False, note="radar: no frames from /dev/ttyAMA0"
+    ),
 }
 
 
@@ -147,6 +151,8 @@ def test_unknown_topic_is_rejected() -> None:
         ),
         (Alert, {"id": 1, "p": 1, "c": 90, "alive": True, "y": 3}),  # half a position
         (Alert, {"v": 2, "id": 1, "p": 1, "c": 90, "alive": True}),  # unknown format
+        (Heartbeat, {"status": "dead", "sim": False}),
+        (Heartbeat, {"status": "ok", "sim": False, "note": "x" * 65}),
     ],
 )
 def test_bad_values_are_rejected(model: type[Message], fields: dict) -> None:
@@ -169,6 +175,36 @@ def test_errors_never_echo_the_rejected_value() -> None:
     with pytest.raises(ValidationError) as caught:
         BleHit(dev="aa:bb:cc:dd:ee:ff", rssi_dbm=-60, rssi_smooth=-60, est_range_m=1)
     assert "aa:bb" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "lost AA:BB:CC:DD:EE:FF",
+        "lost aa-bb-cc-dd-ee-ff",
+        "lost aabbccddeeff",
+        "device 0xAABBCCDDEEFF gone",
+        "E621E1F8-C36C-495A-93FC-0C247A3E6E5F not found",  # macOS Bluetooth UUID
+        "hit from 2efae4bfcede1097",  # a device hash: not for heartbeats either
+    ],
+)
+def test_heartbeat_note_cannot_carry_a_device_address(note: str) -> None:
+    with pytest.raises(ValidationError) as caught:
+        Heartbeat(status="degraded", sim=False, note=note)
+    assert note not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "radar serial port /dev/ttyAMA0 missing",
+        "no frames for 12 s",
+        "log 20261107-221500-node.jsonl",  # a timestamp is not a MAC
+        "I2C 0x33 not responding",
+    ],
+)
+def test_ordinary_heartbeat_notes_pass(note: str) -> None:
+    assert Heartbeat(status="degraded", sim=False, note=note).note == note
 
 
 def test_timestamps_from_a_broken_clock_are_rejected() -> None:

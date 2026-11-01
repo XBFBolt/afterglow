@@ -23,7 +23,7 @@ from pydantic import (
     model_validator,
 )
 
-from common.schema import DeviceHash, Score, WifiChannel
+from common.schema import BreathRate, DeviceHash, Rssi, Score, WifiChannel
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = Path(__file__).with_name("config.yaml")
@@ -101,11 +101,15 @@ class TargetsConfig(Section):
 
 
 class RfConfig(Section):
-    p1m_dbm: float
-    path_loss_n: PositiveFloat
+    p1m_dbm: Rssi
+    # Free space is 2, indoors 2-4; outside 1-6 is a typo, and a tiny n would
+    # overflow the range estimate.
+    path_loss_n: float = Field(ge=1, le=6)
     smooth_window_s: PositiveFloat
-    e_full_dbm: float
-    e_zero_dbm: float
+    smooth_max_samples: int = Field(gt=0)
+    max_devices: int = Field(gt=0)
+    e_full_dbm: Rssi
+    e_zero_dbm: Rssi
 
     @model_validator(mode="after")
     def _ordered(self) -> Self:
@@ -123,6 +127,15 @@ class Weights(Section):
 
 class FusionConfig(Section):
     weights: Weights
+    breath_min: BreathRate
+    breath_max: BreathRate
+    max_skew_s: PositiveFloat
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Self:
+        if self.breath_min >= self.breath_max:
+            raise ValueError("breath_min must be below breath_max")
+        return self
 
 
 class TriageConfig(Section):
@@ -139,7 +152,19 @@ class TriageConfig(Section):
 class TracksConfig(Section):
     bearing_merge_deg: float = Field(gt=0, le=180)
     window_s: PositiveFloat
+    focus_s: PositiveFloat
+    confirm_range_m: PositiveFloat
+    keep_s: PositiveFloat
+    max_tracks: int = Field(gt=0)
+    max_devs: int = Field(gt=0)
     resend_s: PositiveFloat
+    id_file: str
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Self:
+        if not self.focus_s <= self.window_s <= self.keep_s:
+            raise ValueError("need focus_s <= window_s <= keep_s")
+        return self
 
 
 class RelayConfig(Section):
@@ -179,6 +204,10 @@ class TakConfig(Section):
     stale_s: PositiveFloat
 
 
+class HealthConfig(Section):
+    beat_s: PositiveFloat
+
+
 class Config(Section):
     sim: bool
     bus: BusConfig
@@ -196,6 +225,7 @@ class Config(Section):
     thermal: ThermalConfig
     serial: SerialConfig
     tak: TakConfig
+    health: HealthConfig
 
     @model_validator(mode="after")
     def _targets_match_hash_length(self) -> Self:

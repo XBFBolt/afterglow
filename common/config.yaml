@@ -35,13 +35,18 @@ targets:
 
 rf:
   p1m_dbm: -45           # RSSI at 1 m; calibrate on site
-  path_loss_n: 3.0       # log-distance path-loss exponent; calibrate on site
+  path_loss_n: 3.0       # log-distance path-loss exponent (1-6); calibrate on site
   smooth_window_s: 2.5   # RSSI moving-average window
+  smooth_max_samples: 100  # readings kept per device, whatever the window
+  max_devices: 500       # devices the smoother remembers; the longest-quiet is forgotten first
   e_full_dbm: -60        # e_rf = 1 at or above this
   e_zero_dbm: -90        # e_rf = 0 at or below this
 
 fusion:
   weights: {rf: 0.5, thermal: 0.7, radar: 0.7, audio: 0.4}
+  breath_min: 6          # a breathing rate in this range (per minute) is full radar evidence
+  breath_max: 30
+  max_skew_s: 10         # drop messages stamped further than this from fusion's clock
 
 triage:
   confirmed: 0.8         # C at or above: P1 or P2
@@ -49,8 +54,17 @@ triage:
 
 tracks:
   bearing_merge_deg: 20  # merge hits whose bearings are this close...
-  window_s: 30           # ...and were seen within this window
+  window_s: 30           # ...and were seen within this window; older bearings and ranges are unknown
+  focus_s: 5             # thermal/radar hits this recent mean the searcher is at that track
+  confirm_range_m: 8     # a newly confirmed person joins a device estimated this close
+  keep_s: 600            # forget a device-only track after this long unheard (confirmed tracks stay)
+  max_tracks: 256        # when full, the least urgent, longest-quiet track is dropped
+  max_devs: 16           # device hashes remembered per track
   resend_s: 30           # resend P1/P2 alerts this often
+  id_file: logs/next_track_id  # track ids never repeat, even across restarts
+
+health:
+  beat_s: 2              # every long-running module publishes a heartbeat this often
 
 relay:
   ack_timeout_s: 10      # retry with back-off if no ack within this
