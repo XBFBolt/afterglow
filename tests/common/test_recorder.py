@@ -8,7 +8,7 @@ import pytest
 from common import recorder
 from common.config import get_config
 from common.recorder import format_line, log_path, parse_line, record
-from common.schema import Message, RadarHit, Target
+from common.schema import Heartbeat, Message, RadarHit, Target
 
 
 def test_line_round_trip() -> None:
@@ -52,12 +52,27 @@ class _Done(Exception):
 
 def _fake_bus(
     monkeypatch: pytest.MonkeyPatch, msgs: list[Message], disk: list[bool]
-) -> None:
+) -> list[Heartbeat]:
     """Replace the bus with msgs, one per fsync interval, and the free-space
-    check with disk. Stops record() when msgs run out."""
+    check with disk. Stops record() when msgs run out. Returns the recorder's
+    heartbeats, filled in as it runs."""
     clock = [0.0]
     pending = iter(msgs)
     free = iter(disk)
+    beats: list[Heartbeat] = []
+
+    class FakePublisher:
+        def __init__(self, src: str, bus: str) -> None:
+            pass
+
+        def __enter__(self) -> "FakePublisher":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            pass
+
+        def publish(self, topic: str, msg: Heartbeat) -> None:
+            beats.append(msg)
 
     class FakeSubscriber:
         def __init__(self, topics: list[str], bus: str) -> None:
@@ -77,8 +92,10 @@ def _fake_bus(
             return "confirm.radar", msg
 
     monkeypatch.setattr(recorder, "Subscriber", FakeSubscriber)
+    monkeypatch.setattr(recorder, "Publisher", FakePublisher)
     monkeypatch.setattr(recorder.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(recorder, "disk_ok", lambda path, mb: next(free))
+    return beats
 
 
 def _radar(n: int) -> RadarHit:
@@ -89,7 +106,7 @@ def test_recording_pauses_on_low_disk_and_says_so(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     msgs = [_radar(n) for n in range(4)]
-    _fake_bus(monkeypatch, msgs, disk=[True, False, True, True])
+    beats = _fake_bus(monkeypatch, msgs, disk=[True, False, True, True])
     path = tmp_path / "run.jsonl"
     with caplog.at_level(logging.INFO), pytest.raises(_Done):
         record("node", path)
@@ -98,6 +115,9 @@ def test_recording_pauses_on_low_disk_and_says_so(
     assert recorded == [msgs[0], msgs[1], msgs[3]]
     assert "recording paused" in caplog.text
     assert "recording resumed" in caplog.text
+    # The pause reached the operator too, not just the log.
+    assert [b.status for b in beats] == ["ok", "degraded"]
+    assert all(b.src in ("", "recorder") for b in beats)
 
 
 def test_recorder_recreates_a_deleted_log_dir(

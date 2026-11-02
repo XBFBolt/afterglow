@@ -3,3 +3,4 @@
 bus: python -m common.bus --bus node
 recorder: python -m common.recorder --bus node
 fusion: python -m fuse.fusion
+relay: python -m relay.lora_tx

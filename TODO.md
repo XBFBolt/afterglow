@@ -38,19 +38,23 @@ Fake scenario → fusion → relay queue → LoRa (sim) → receiver → web map
 - [x] `find/rssi_filter.py`: smoothing, log-distance range estimate, `e_rf` mapping (−60 dBm → 1, −90 dBm → 0) + tests
 - [x] `fuse/tracks.py`: merge hits by device hash, or bearing within 20° seen in the last 30 s + tests
 - [x] `fuse/fusion.py`: noisy-OR confidence, P1–P4 triage, send rules (new track, priority change, every 30 s for P1/P2) + tests
-- [ ] Decide the bearing reference before the relay and thermal work: compass bearings (fit the IMU), or camera-relative (merge window down to about `focus_s`, and `brg` not sent over the air, since it means nothing to the operator)
+- [x] Decide the bearing reference: camera-relative (no IMU; a compass is unreliable indoors near metal). Bearing merge window down to `tracks.bearing_s` (5 s), and `brg` not sent over the air
+- [x] Decide victim position: no GPS, so the node sends none; the command post puts each marker at the searcher's position (fixed in config for now), labelled with range from the searcher
+- [x] Fusion also publishes when a breathing rate first becomes known (the first P1 used to go out 5 s before breathing and wait 30 s for the resend)
 - [x] A person first seen while their phone still reads past `tracks.confirm_range_m` (body loss: a phone under the victim can read 9 m away) takes the phone once it reads closer
-- [ ] Status beacon over LoRa, designed before the codec: modules-up bitmask + sequence number every N s, doubling as the link keepalive, so the post can tell "no victims" from "link dead"; its quiet threshold must allow for beats up to 2 × `health.beat_s` apart
-- [ ] `relay/codec.py`: `Alert` to and from compact bytes, under 100 bytes + tests (a full alert as compact JSON is already 99 bytes with small numbers: drop empty fields or struct-pack)
-- [ ] `relay/priority_queue.py`: priority then age, newer alert replaces queued older one, back-off retry after 10 s without ack, P1 never blocked + tests
-- [ ] `relay/lora_tx.py` and `relay/lora_rx.py` with a sim radio that can drop and restore the link
-- [ ] `map/web/`: Flask + Leaflet, markers colored by priority, vitals popup, hazard ring, P1-first side list, "last received" timestamp, x/y floor-plan mode
-- [ ] `map/cot_sender.py`: CoT via pytak, `uid` = `AG-<track id>`, stale after 2 min, searcher as a friendly marker
-- [ ] `tools/replay.py`: replays a `.jsonl` run through the same pipeline
+- [x] Status beacon over LoRa: sequence number + modules-up and degraded bitmasks every 10 s, no ack, doubling as the link keepalive (link down after 30 s silent); a module is down after `health.down_after_s` (6 s, over 2 × `beat_s`). Compact JSON came out at 40–55 bytes, not the ~10 a packed format would give
+- [x] `relay/codec.py`: `Alert` and `Beacon` to and from compact JSON with unknown fields left off; worst-case alert 91 bytes (no position or bearing any more) + tests
+- [x] `relay/priority_queue.py`: priority then age, newer alert replaces queued older one, back-off retry after 10 s without ack, P1 never blocked + tests
+- [x] `relay/lora_tx.py` and `relay/lora_rx.py` with a sim radio (`relay/radio.py`, UDP on loopback) that can drop and restore the link (`python -m relay.radio down|up`)
+- [x] `map/web/`: standard-library server and one page with nothing loaded from outside (the post has no internet; Flask and Leaflet dropped): P1-first list colored by priority, vitals, hazard, "heard N s ago", link and module status, a loud banner when the map server stops answering
+- [ ] Web map: a floor-plan view with the searcher and markers, and the searcher's position settable by clicking it instead of fixed in config
+- [x] `map/cot_sender.py`: CoT over UDP (standard library, no pytak), `uid` = `AG-<track id>`, stale after 2 min, searcher as a friendly marker; untested against a real TAK client
+- [x] `tools/replay.py`: replays a `.jsonl` run's sensor messages through the live pipeline
 - [x] `Heartbeat` model on `health.beat` and the `common.health.Heart` helper; fusion beats
-- [ ] Health: every other module publishes a heartbeat (recorder, sensors, relay); the map flags any sensor or link that has gone quiet (silence must never look like "no victim")
-- [ ] Integration test: fake scenario ends with a P1 alert received at the command post
-- [ ] Milestone: `honcho` starts node and post on one laptop and the full scenario plays out on the web map
+- [x] Health: recorder (degraded when disk is low), relay, receiver, map and TAK output publish heartbeats; the map flags any module or link that has gone quiet. Each sensor module adds its own in Phase 2, and its name to `health.node_modules`
+- [x] Integration test: fake scenario ends with a P1 alert received at the command post; after a link drop the queued P1 arrives first (`tests/relay/test_end_to_end.py`)
+- [ ] Milestone: `honcho` starts node and post on one laptop and the full scenario plays out on the web map (runs, and `/state` shows the P1 and a link drop; still needs a look in a browser)
+- [ ] Phase 1 review against the engineering standard, then fixes
 
 ## Hardware bring-up
 

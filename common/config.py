@@ -158,6 +158,7 @@ class TriageConfig(Section):
 
 class TracksConfig(Section):
     bearing_merge_deg: float = Field(gt=0, le=180)
+    bearing_s: PositiveFloat
     window_s: PositiveFloat
     focus_s: PositiveFloat
     radar_merge_m: PositiveFloat
@@ -175,12 +176,43 @@ class TracksConfig(Section):
     def _ordered(self) -> Self:
         if not self.focus_s <= self.window_s <= self.keep_s:
             raise ValueError("need focus_s <= window_s <= keep_s")
+        if self.bearing_s > self.window_s:
+            raise ValueError("bearing_s must not exceed window_s")
         return self
 
 
 class RelayConfig(Section):
     ack_timeout_s: PositiveFloat
-    max_alert_bytes: int = Field(gt=0, le=233)  # 233 = Meshtastic's payload limit
+    retry_max_s: PositiveFloat
+    queue_max: int = Field(gt=0)
+    # 233 is Meshtastic's payload limit; under 64 a status beacon might not fit.
+    max_alert_bytes: int = Field(ge=64, le=233)
+    beacon_s: PositiveFloat
+    link_dead_s: PositiveFloat
+    sim_port: Port
+    sim_loss: float = Field(ge=0, le=1)
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Self:
+        if self.retry_max_s < self.ack_timeout_s:
+            raise ValueError("retry_max_s must not be below ack_timeout_s")
+        # One late beacon must not read as a dead link.
+        if self.link_dead_s < 2 * self.beacon_s:
+            raise ValueError("link_dead_s must be at least 2 x beacon_s")
+        return self
+
+
+class PostConfig(Section):
+    searcher_lat: float = Field(ge=-90, le=90)
+    searcher_lon: float = Field(ge=-180, le=180)
+    web_host: str
+    web_port: Port
+
+    @field_validator("web_host")
+    @classmethod
+    def _ipv4(cls, host: str) -> str:
+        ipaddress.IPv4Address(host)
+        return host
 
 
 class HazardConfig(Section):
@@ -210,13 +242,36 @@ class SerialConfig(Section):
 
 
 class TakConfig(Section):
-    url: str
+    url: str = Field(pattern=r"^udp://\d+\.\d+\.\d+\.\d+:\d+$")
+    send_from: str
     uid_prefix: str
     stale_s: PositiveFloat
+
+    @field_validator("send_from")
+    @classmethod
+    def _ipv4(cls, host: str) -> str:
+        ipaddress.IPv4Address(host)
+        return host
+
+
+ModuleName = Annotated[str, Field(pattern=r"^[a-z_]{1,32}$")]  # a Heartbeat src
 
 
 class HealthConfig(Section):
     beat_s: PositiveFloat
+    down_after_s: PositiveFloat
+    node_modules: list[ModuleName] = Field(min_length=1, max_length=16)  # beacon bits
+    post_modules: list[ModuleName] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _sane(self) -> Self:
+        # Beats can come up to 2 x beat_s apart; a module must not flicker down.
+        if self.down_after_s <= 2 * self.beat_s:
+            raise ValueError("down_after_s must be over 2 x beat_s")
+        for names in (self.node_modules, self.post_modules):
+            if len(set(names)) != len(names):
+                raise ValueError("a module is listed twice")
+        return self
 
 
 class Config(Section):
@@ -231,6 +286,7 @@ class Config(Section):
     triage: TriageConfig
     tracks: TracksConfig
     relay: RelayConfig
+    post: PostConfig
     hazard: HazardConfig
     wifi: WifiConfig
     thermal: ThermalConfig
@@ -251,6 +307,16 @@ class Config(Section):
         # A P1 marker must be resent before TAK greys it out.
         if self.tracks.resend_s >= self.tak.stale_s:
             raise ValueError("tracks.resend_s must be under tak.stale_s")
+        return self
+
+    @model_validator(mode="after")
+    def _sim_radio_port_free(self) -> Self:
+        bus = (self.bus.node, self.bus.post)
+        taken = {port for ports in bus for port in (ports.pub_port, ports.sub_port)}
+        if self.relay.sim_port in taken or self.post.web_port in taken:
+            raise ValueError("relay.sim_port and post.web_port must not be bus ports")
+        if self.relay.sim_port == self.post.web_port:
+            raise ValueError("relay.sim_port and post.web_port must differ")
         return self
 
     @model_validator(mode="after")

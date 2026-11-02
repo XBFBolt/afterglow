@@ -2,7 +2,8 @@
 
 Each line is {"topic": ..., "msg": {...}}. Lines reach the OS as they arrive and
 are forced to disk every log.fsync_s, so a power cut loses at most that much.
-Recording pauses, with an error, if free disk drops below log.min_free_mb.
+Recording pauses, with an error and a "degraded" heartbeat, if free disk drops
+below log.min_free_mb.
 
 Run with: python -m common.recorder
 """
@@ -16,8 +17,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from common.bus import BUSES, Subscriber
+from common.bus import BUSES, Publisher, Subscriber
 from common.config import REPO_ROOT, get_config, setup_logging
+from common.health import Heart
 from common.schema import Message, model_for
 from common.service import run_forever
 
@@ -50,7 +52,12 @@ def record(bus: str, path: Path) -> None:
     """Append every message on the bus to path. Runs until an error."""
     cfg = get_config().log
     path.parent.mkdir(parents=True, exist_ok=True)  # in case it was deleted mid-run
-    with Subscriber([""], bus=bus) as sub, path.open("a") as f:
+    with (
+        Subscriber([""], bus=bus) as sub,
+        Publisher("recorder", bus=bus) as pub,
+        path.open("a") as f,
+    ):
+        heart = Heart(pub, sim=get_config().sim)
         paused = False
         last_sync = 0.0  # sync and check the disk on the first pass
         while True:
@@ -69,6 +76,10 @@ def record(bus: str, path: Path) -> None:
                         log.error("under %d MB free: recording paused", cfg.min_free_mb)
                     else:
                         log.info("disk space back: recording resumed")
+            if paused:
+                heart.beat("degraded", "disk low: recording paused")
+            else:
+                heart.beat()
 
 
 def main() -> None:

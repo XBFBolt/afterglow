@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Afterglow Command Post</title>
+<!-- Everything inline: the command post has no internet. -->
+<style>
+  :root {
+    --bg: #0f1216; --panel: #181d23; --line: #2a313a; --text: #e8edf2; --dim: #8b96a3;
+    --ok: #2fb36b; --warn: #e0a526; --bad: #e5484d; --unknown: #6b7684;
+    --p1: #e5484d; --p2: #f2802e; --p3: #e0c026; --p4: #6b7684;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+           padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 18px; margin: 0 auto 0 0; letter-spacing: .04em; }
+  .pill { padding: 4px 12px; border-radius: 999px; font-weight: 700; font-size: 14px; }
+  .up { background: var(--ok); color: #04130a; }
+  .down { background: var(--bad); color: #fff; }
+  .waiting, .unknown { background: var(--unknown); color: #fff; }
+  .sim { background: var(--warn); color: #1d1503; }
+  #stale { display: none; background: var(--bad); color: #fff; font-weight: 700;
+           padding: 10px 16px; }
+  main { padding: 16px; max-width: 900px; margin: 0 auto; }
+  section { margin-bottom: 20px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+       color: var(--dim); margin: 0 0 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px;
+          font-size: 14px; display: flex; gap: 6px; align-items: center; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .dot.ok { background: var(--ok); } .dot.degraded { background: var(--warn); }
+  .dot.down { background: var(--bad); } .dot.unknown { background: var(--unknown); }
+  .note { color: var(--dim); font-size: 14px; margin-top: 6px; }
+  .card { background: var(--panel); border: 1px solid var(--line);
+          border-left: 8px solid var(--p4); border-radius: 8px;
+          padding: 12px 14px; margin-bottom: 10px; }
+  .card.p1 { border-left-color: var(--p1); } .card.p2 { border-left-color: var(--p2); }
+  .card.p3 { border-left-color: var(--p3); }
+  .card.old { opacity: .6; }
+  .top { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .prio { font-weight: 800; font-size: 20px; }
+  .label { color: var(--dim); font-weight: 600; }
+  .heard { margin-left: auto; color: var(--dim); font-size: 14px; }
+  .facts { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 6px; }
+  .danger { color: var(--bad); font-weight: 700; }
+  .caution { color: var(--warn); font-weight: 700; }
+  .empty { color: var(--dim); padding: 24px 0; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AFTERGLOW · COMMAND POST</h1>
+  <span id="sim" class="pill sim" hidden>SIM DATA</span>
+  <span id="link" class="pill waiting">LINK: WAITING</span>
+</header>
+<div id="stale"></div>
+<main>
+  <section>
+    <h2>Victims</h2>
+    <div id="victims"><div class="empty">Connecting to the map server…</div></div>
+  </section>
+  <section>
+    <h2>Field node</h2>
+    <div id="node" class="chips"></div>
+    <div id="link-note" class="note"></div>
+  </section>
+  <section>
+    <h2>Command post</h2>
+    <div id="post" class="chips"></div>
+  </section>
+</main>
+<script>
+"use strict";
+const POLL_MS = 1000, STALE_MS = 3000, OLD_S = 120;
+const LABEL = {1: "URGENT", 2: "CONFIRMED", 3: "POSSIBLE", 4: "DEVICE ONLY"};
+let lastOk = Date.now();
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function ago(s) {
+  if (s < 60) return Math.round(s) + " s ago";
+  if (s < 3600) return Math.round(s / 60) + " min ago";
+  return (s / 3600).toFixed(1) + " h ago";
+}
+
+function chips(id, modules) {
+  const box = document.getElementById(id);
+  box.replaceChildren(...modules.map(m => {
+    const c = el("span", "chip");
+    c.append(el("span", "dot " + m.state), el("span", "", m.name + ": " + m.state));
+    return c;
+  }));
+}
+
+function card(v) {
+  const c = el("div", "card p" + v.p + (v.heard_s > OLD_S ? " old" : ""));
+  const top = el("div", "top");
+  top.append(el("span", "prio", "P" + v.p), el("span", "label", LABEL[v.p]),
+             el("span", "", "track " + v.id),
+             el("span", "heard", "heard " + ago(v.heard_s) + " (" + v.heard_at + ")"));
+  const facts = el("div", "facts");
+  facts.append(el("span", "", v.alive ? "Alive" : "Life not confirmed"));
+  facts.append(el("span", "", v.br === null ? "breathing unknown" : "breathing " + v.br + "/min"));
+  facts.append(el("span", "", "confidence " + v.c + "%"));
+  facts.append(el("span", "", v.rng === null ? "near searcher, range unknown"
+                  : v.rng < 1 ? "under 1 m from searcher" : "within " + v.rng + " m of searcher"));
+  facts.append(v.hz === null ? el("span", "", "gas: no reading")
+               : el("span", v.hz === "none" ? "" : v.hz, "gas: " + v.hz));
+  c.append(top, facts);
+  return c;
+}
+
+function render(s) {
+  const link = document.getElementById("link");
+  link.className = "pill " + s.link;
+  link.textContent = "LINK: " + s.link.toUpperCase();
+  document.getElementById("sim").hidden = s.sim !== true;
+  const note = document.getElementById("link-note");
+  if (s.link === "waiting") note.textContent = "No beacon from the node yet.";
+  else note.textContent = "Last beacon " + ago(s.beacon_age_s) + "; " + s.missed + " lost in the air." +
+    (s.link === "down" ? " Node status unknown until the link is back." : "");
+  chips("node", s.node);
+  chips("post", s.post);
+  const box = document.getElementById("victims");
+  if (s.victims.length) {
+    box.replaceChildren(...s.victims.map(card));
+  } else {
+    box.replaceChildren(el("div", "empty", s.link === "up"
+      ? "No victims reported."
+      : "No victims received, but the link is " + s.link + ": that is not the same as none found."));
+  }
+}
+
+async function poll() {
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), POLL_MS * 2);
+    const r = await fetch("/state", {cache: "no-store", signal: ctl.signal});
+    clearTimeout(timer);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    render(await r.json());
+    lastOk = Date.now();
+  } catch (e) { /* shown by the stale banner below */ }
+  const stale = document.getElementById("stale");
+  const quiet = Date.now() - lastOk;
+  stale.style.display = quiet > STALE_MS ? "block" : "none";
+  stale.textContent = "MAP SERVER NOT RESPONDING for " + Math.round(quiet / 1000) +
+    " s: everything below is out of date.";
+  setTimeout(poll, POLL_MS);
+}
+poll();
+</script>
+</body>
+</html>

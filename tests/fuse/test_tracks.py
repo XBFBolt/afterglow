@@ -12,6 +12,7 @@ KNOWN = "3" * 16  # a target device from config
 def _cfg(**changes: object) -> TracksConfig:
     base = {
         "bearing_merge_deg": 20,
+        "bearing_s": 5,
         "window_s": 30,
         "focus_s": 5,
         "confirm_range_m": 8,
@@ -81,9 +82,9 @@ def test_same_device_joins_its_track_however_long_ago() -> None:
 def test_bearing_within_merge_angle_and_window_joins() -> None:
     tr = _tracker()
     first = tr.add_thermal(thermal(0, 40), 0.9)
-    assert tr.add_thermal(thermal(10, 55), 0.9) is first  # 15 degrees
-    assert tr.add_thermal(thermal(11, 80), 0.9) is not first  # 25 from 55
-    assert tr.add_rf(ble(PHONE, 12, bearing=50), 0.5) is first
+    assert tr.add_thermal(thermal(4, 55), 0.9) is first  # 15 degrees
+    assert tr.add_thermal(thermal(5, 80), 0.9) is not first  # 25 from 55
+    assert tr.add_rf(ble(PHONE, 6, bearing=50), 0.5) is first
 
 
 def test_bearing_merge_wraps_through_north() -> None:
@@ -92,9 +93,10 @@ def test_bearing_merge_wraps_through_north() -> None:
 
 
 def test_an_old_bearing_does_not_join() -> None:
+    # Camera-relative: after bearing_s the searcher may face another way.
     tr = _tracker()
     first = tr.add_thermal(thermal(0, 40), 0.9)
-    assert tr.add_thermal(thermal(31, 40), 0.9) is not first
+    assert tr.add_thermal(thermal(6, 40), 0.9) is not first
 
 
 def test_the_nearest_bearing_wins() -> None:

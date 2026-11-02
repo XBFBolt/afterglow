@@ -59,7 +59,10 @@ triage:
 
 tracks:
   bearing_merge_deg: 20  # merge hits whose bearings are this close...
-  window_s: 30           # ...and were seen within this window; older bearings and ranges are unknown
+  # ...and were measured this recently. Bearings are camera-relative (no compass),
+  # so one is only comparable until the searcher turns; older ones are unknown.
+  bearing_s: 5
+  window_s: 30           # ranges and breathing rates older than this are unknown
   focus_s: 5             # thermal/radar hits this recent mean the searcher is at that track
   radar_merge_m: 1.5     # a radar hit joins a track only if this close to its last radar range,
   radar_drift_mps: 1.0   # plus this much per second since that reading (the searcher walks)
@@ -76,10 +79,30 @@ tracks:
 
 health:
   beat_s: 2              # every long-running module publishes a heartbeat this often
+  down_after_s: 6        # a module silent this long is down; over 2 x beat_s, as beats can come that far apart
+  # Node modules the status beacon reports, by heartbeat src, one bit each (16 at
+  # most). The order is part of the beacon format: append only, and run the same
+  # list on the node and the command post.
+  node_modules: [fusion, recorder]
+  post_modules: [lora_rx, recorder, cot_sender]  # shown on the web map
 
 relay:
-  ack_timeout_s: 10      # retry with back-off if no ack within this
+  ack_timeout_s: 10      # no ack within this: send again...
+  retry_max_s: 30        # ...waiting twice as long each time, up to this
+  queue_max: 64          # alerts waiting to go; past this the least urgent is dropped
   max_alert_bytes: 100
+  beacon_s: 10           # status beacon period; it doubles as the link keepalive
+  link_dead_s: 30        # command post: no beacon for this long means the link is down
+  sim_port: 5570         # sim radio: the command post listens here, on bus.host
+  sim_loss: 0.0          # sim radio: chance each packet is lost in the air (0-1)
+
+post:
+  # No GPS: every marker goes at the searcher's position, labelled with its
+  # range from the searcher. For now that position is this fixed point.
+  searcher_lat: 42.36030
+  searcher_lon: -71.05880
+  web_host: 127.0.0.1    # web map; loopback keeps it on this laptop
+  web_port: 8080
 
 hazard:
   caution_x: 1.5         # gas reading at this multiple of the clean-air baseline
@@ -99,5 +122,8 @@ serial:                  # check with `ls /dev/tty*` after plugging in
 
 tak:
   url: udp://239.2.3.1:6969
+  # Local address CoT goes out from. 127.0.0.1 keeps it on this laptop; at the
+  # event, set this laptop's address on our own router (CoT is unencrypted).
+  send_from: 127.0.0.1
   uid_prefix: AG-
   stale_s: 120

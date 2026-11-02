@@ -145,24 +145,39 @@ class Target(Message):
 
 class Alert(Message):
     """What crosses the LoRa link. Short keys and whole numbers keep it small;
-    relay/codec.py owns the over-the-air encoding."""
+    relay/codec.py owns the over-the-air encoding.
+
+    No position and no bearing: there is no GPS, and bearings are relative to
+    the camera, so they mean nothing to the operator. The command post puts
+    the marker at the searcher's position, `rng` meters away."""
 
     v: Literal[1] = 1  # format version; any other is rejected, not misread
     id: int = Field(ge=0)  # track id
     p: Priority
     c: int = Field(ge=0, le=100)  # confidence, percent
-    x: int | None = None  # meters east of the start point
-    y: int | None = None  # meters north of the start point
-    brg: Annotated[int, Field(ge=0, lt=360)] | None = None  # bearing, degrees
-    rng: Annotated[int, Field(ge=0)] | None = None  # range, meters
+    rng: Annotated[int, Field(ge=0)] | None = None  # range from the searcher, meters
     alive: bool
     br: Annotated[int, Field(ge=0, le=100)] | None = None  # breaths per minute
     hz: Annotated[int, Field(ge=0, le=2)] | None = None  # 0 none, 1 caution, 2 danger
 
-    @model_validator(mode="after")
-    def _whole_position(self) -> Self:
-        _check_position(self.x, self.y)
-        return self
+
+Bits16 = Annotated[int, Field(ge=0, lt=1 << 16)]
+
+
+class Beacon(Message):
+    """The node's status, sent over LoRa every relay.beacon_s without an ack.
+    It doubles as the link keepalive: no beacon for relay.link_dead_s means the
+    link is down, so the command post can tell "no victims" from "no link".
+
+    One bit per module in health.node_modules (bit i = i-th module): `up` if it
+    has beaten in the last health.down_after_s, `bad` if its last beat said
+    degraded. `t` isn't sent; the receiver stamps its own clock."""
+
+    v: Literal[1] = 1  # format version
+    seq: Bits16  # +1 per beacon, wrapping; a gap is beacons lost in the air
+    up: Bits16
+    bad: Bits16
+    sim: bool  # some of the node runs on fake hardware or fake data
 
 
 class Heartbeat(Message):
@@ -194,6 +209,7 @@ TOPICS: dict[str, type[Message]] = {
     "fuse.target": Target,
     "relay.out": Alert,
     "relay.in": Alert,
+    "relay.beacon": Beacon,
     "health.beat": Heartbeat,
 }
 

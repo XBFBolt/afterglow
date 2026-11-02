@@ -40,12 +40,14 @@ find/          wifi_sniffer.py, ble_scanner.py, rssi_filter.py
 confirm/       thermal.py, person_detect.py, radar.py
 hazard/        arduino/gas_sensor.ino, gas_reader.py
 fuse/          fusion.py (score + triage), tracks.py (merge hits into targets)
-relay/         lora_tx.py (field), lora_rx.py (command post), priority_queue.py, codec.py
-map/           cot_sender.py (TAK), web/ (Flask + Leaflet fallback)
+relay/         lora_tx.py (field), lora_rx.py (command post), priority_queue.py, codec.py,
+               radio.py (sim radio; the Meshtastic board goes behind the same interface)
+map/           board.py (what the command post knows), cot_sender.py (TAK),
+               web/ (standard-library server + one page with nothing loaded from outside)
 tools/         replay.py, fake_detections.py, calibrate_rssi.py, tap.py (print bus traffic)
 tests/         mirrors the package layout
 Procfile.node  starts every field process
-Procfile.post  starts receiver + map on the laptop
+Procfile.post  starts receiver, web map and TAK output on the laptop
 TODO.md        team task list; check items off as they land
 ```
 
@@ -71,6 +73,7 @@ Bus topics and the model each one carries:
 | `fuse.target` | `Target` | fuse/fusion.py |
 | `relay.out` | `Alert` | relay/lora_tx.py (what was sent) |
 | `relay.in` | `Alert` | relay/lora_rx.py (what was received) |
+| `relay.beacon` | `Beacon` | relay/lora_rx.py (node status, received) |
 | `health.beat` | `Heartbeat` | every long-running module, via `common.health.Heart` |
 
 Key fields (see `schema.py` for the full definitions):
@@ -80,7 +83,8 @@ Key fields (see `schema.py` for the full definitions):
 - `RadarHit`: `present`, `moving | None`, `range_m | None`, `breaths_per_min | None`, `conf` (when nobody is present, all three are `None`, never `False` or 0)
 - `HazardReading`: `hazard` ("none" | "caution" | "danger"), `gas_raw` (0–1023), `temp_c | None`
 - `Target`: `id`, `confidence`, `priority` (1–4), `alive`, `bearing_deg`, `range_m`, `breaths_per_min`, `hazard`, `x`, `y` (meters from the start point, if known), `evidence` (`Evidence`: per-sensor e values, `None` for a sensor with nothing on the track)
-- `Alert`: compact keys `v, id, p, c, x, y, brg, rng, alive, br, hz, t`; must encode to at most `relay.max_alert_bytes` (100); unknown values (`br`, `hz`, position) are `None` and left off the air, never sent as 0
+- `Alert`: compact keys `v, id, p, c, rng, alive, br, hz, t`; must encode to at most `relay.max_alert_bytes` (100); unknown values (`rng`, `br`, `hz`) are `None` and left off the air, never sent as 0. No position and no bearing: there is no GPS, and bearings are camera-relative, so they mean nothing to the operator
+- `Beacon`: `seq` (wrapping counter; gaps are lost beacons), `up` and `bad` (one bit per module in `health.node_modules`: beating, and last beat said degraded), `sim`. Sent every `relay.beacon_s` with no ack; its `t` is never sent, the receiver stamps its own clock
 - `Heartbeat`: `status` ("ok" | "degraded": running but blind), `sim`, `note | None` (64 chars; anything shaped like a MAC is rejected). Sent every `health.beat_s` from the module's main loop, never a thread, so a hung loop goes quiet
 
 Bus usage: always go through `common/bus.py` (`Publisher(src)`, `Subscriber(topics)`). Do not open raw ZeroMQ sockets in modules. The proxy runs as its own process and binds local ports defined in `config.yaml`. `Publisher` stamps its `src` on any message that leaves `src` empty. The node and the command post each run their own bus on separate ports (`bus="post"` in code, `--bus post` on the command line), so both can run on one laptop in sim mode.
@@ -105,16 +109,21 @@ Triage:
 Tracks (full rules in `fuse/tracks.py`):
 
 - With `targets.known_only: true` (demo and testing), fusion ignores every device not in `targets.devices`, so bystanders' phones can't flood the link or lend their signal to a heat pack. Set it false for a real search. Ignored hits are counted, and fusion warns if the target device isn't being heard (a changed salt or a randomized address would otherwise blind the search silently).
-- A device hit joins the track holding its device hash. A hit with a bearing joins a track seen within 20° in the last 30 s.
+- A device hit joins the track holding its device hash. A hit with a bearing joins a track seen within 20° in the last 5 s (`bearing_s`): bearings are relative to the camera (no compass), so an older one may have been taken facing another way.
 - Thermal and radar share a bracket and look at one thing at a time. A radar hit (no bearing) joins the track the radar saw in the last 5 s at a range within 1.5 m plus 1 m for each second since (the searcher walks); failing that, whatever the camera last saw, if the radar has nothing recent on it. Someone at another range is someone else.
 - When they find someone new, that person joins the device track the searcher was closing in on: heard in the last 30 s, estimated within 8 m, nobody seen on it yet, known target devices first, then the strongest signal. A person with no device takes that device track whenever they're seen, so someone first seen from too far away still gets their phone. Two people never share a marker; a duplicate marker is the lesser evil.
-- Each sensor's evidence on a track is the strongest it has given, so confidence never drops because the searcher walked away. Bearing, range and breathing rate go stale and become unknown (`None`) after 30 s; the last radar reading still decides "not moving", so a victim left behind stays P1.
+- Each sensor's evidence on a track is the strongest it has given, so confidence never drops because the searcher walked away. Range and breathing rate go stale and become unknown (`None`) after 30 s, bearing after 5 s; the last radar reading still decides "not moving", so a victim left behind stays P1.
 - Priority rises at once but drops only after the lower priority has held for 10 s, so a flickering radar can't flip the marker every second.
 - Only P1/P2 tracks are kept for good; anything below is forgotten after 10 min unheard, so a crowd doesn't pile up. Track ids never repeat, and P1/P2 tracks seen in the last 15 min survive a restart or reboot, both saved in `state/` (not `logs/`, so clearing recordings can't reset ids). The command post keys markers by id. Run `--new-search` before every search or rehearsal so the last one's victims don't come back.
 
-Fusion publishes `fuse.target` when a track is created, when its priority changes, and every 30 s for P1/P2.
+Fusion publishes `fuse.target` when a track is created, when its priority changes, when a breathing rate becomes known (proof of life shouldn't wait for the next resend), and every 30 s for P1/P2.
 
-Relay queue: ordered by priority then age; retry with back-off if no ack within 10 s; a newer alert for a track replaces any queued older one; a stuck low-priority alert must never block a P1.
+Relay (full rules in `relay/priority_queue.py`):
+
+- Queue ordered by priority then age, one alert per track: a newer alert replaces the queued one and keeps its place. Only the head is sent, so after a link drop the most urgent alert arrives first, and a new P1 always becomes the head, so a stuck low-priority alert never holds it up.
+- No ack within 10 s: send again, doubling the wait up to 30 s. Any ack proves the link is up and cuts every longer wait back to 10 s.
+- A status beacon goes every 10 s without an ack, never ahead of a ready alert. It doubles as the keepalive: with no beacon for 30 s the command post shows the link down and the node's modules as unknown, never "ok", so silence never looks like "no victims".
+- No GPS, so the node sends no position. The command post puts every marker at the searcher's position (`post.searcher_lat`/`_lon`, a fixed point for now), labelled with its range from the searcher.
 
 All weights, thresholds and timings live in `config.yaml`, never as magic numbers in code.
 
@@ -140,7 +149,10 @@ uv run python -m fuse.fusion --new-search # before each search or rehearsal, nod
 uv run python -m tools.fake_detections    # play the fake victim scenario
 uv run python -m tools.tap                # print all bus traffic
 uv run python -m tools.replay logs/<run>.jsonl
+uv run python -m relay.radio down         # sim only: cut the LoRa link (up restores it)
 ```
+
+The web map is at http://127.0.0.1:8080/ once `Procfile.post` is running.
 
 Run modules as packages (`python -m find.ble_scanner`), not as loose scripts.
 
@@ -173,14 +185,14 @@ Run modules as packages (`python -m find.ble_scanner`), not as loose scripts.
 - Radar: LD2410 or Rd-03D on UART (`/dev/ttyAMA0`) or USB-serial
 - Gas: Arduino + Grove MQ sensor, prints one JSON line per 500 ms over USB serial
 - LoRa: Meshtastic board over USB serial, region US, same preset on both ends
-- TAK: CoT via `pytak` to `udp://239.2.3.1:6969`; marker `uid` = `AG-<track id>`, stale after 2 min
+- TAK: CoT over UDP (standard library, no pytak) to `udp://239.2.3.1:6969`, sent from `tak.send_from`: loopback by default, set to the laptop's address on our own router at the event; marker `uid` = `AG-<track id>`, stale after 2 min
 
 Serial device paths and ports belong in `config.yaml`.
 
 ## Current priorities
 
 1. ~~Phase 0: schema, bus, logger, fake scenario.~~ Done.
-2. Thin end-to-end path: fake scenario → fusion → relay queue → LoRa (sim) → receiver → web map and TAK. Fusion side done; next is the relay.
+2. Thin end-to-end path: fake scenario → fusion → relay queue → LoRa (sim) → receiver → web map and TAK. Built and running in sim; next is the Phase 1 review, then hardening.
 3. Real sensor modules, one at a time, each behind `--sim`.
 4. Stretch only after the above is solid: Hailo person detection, breathing-rate FFT, directional bearing.
 

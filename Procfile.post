@@ -1,4 +1,7 @@
 # Command post laptop. Uses its own bus ports, so it can run beside Procfile.node.
-# Start: uv run honcho -f Procfile.post start
+# Start: uv run honcho -f Procfile.post start, then open http://127.0.0.1:8080/
 bus: python -m common.bus --bus post
 recorder: python -m common.recorder --bus post
+receiver: python -m relay.lora_rx
+map: python -m map.web.server
+tak: python -m map.cot_sender

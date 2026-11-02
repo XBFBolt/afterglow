@@ -3,7 +3,7 @@ import time
 import pytest
 
 from common.config import get_config
-from common.health import Heart
+from common.health import Heart, Watch, states_from_bits
 from common.schema import NOTE_MAX, Heartbeat, Message
 
 
@@ -73,3 +73,39 @@ def test_note_with_a_mac_is_left_off_not_published(
     [beat] = pub.beats()
     assert beat.status == "degraded" and beat.note is None
     assert "AA:BB" not in caplog.text
+
+
+def _beat(src: str, status: str = "ok", sim: bool = False) -> Heartbeat:
+    return Heartbeat(src=src, status=status, sim=sim)  # type: ignore[arg-type]
+
+
+def test_watch_tells_up_degraded_and_down_apart() -> None:
+    watch = Watch(["fusion", "recorder", "radar"], down_after_s=6)
+    watch.heard(_beat("fusion"), now=0)
+    watch.heard(_beat("radar", "degraded"), now=3)
+    watch.heard(_beat("stranger"), now=3)  # not listed: ignored
+    assert watch.states(5) == {"fusion": "ok", "recorder": "down", "radar": "degraded"}
+    assert watch.states(7)["fusion"] == "down"  # quiet over down_after_s
+    assert watch.bits(5) == (0b101, 0b100)
+
+
+def test_watch_sees_sim_only_from_modules_that_are_up() -> None:
+    watch = Watch(["fusion", "radar"], down_after_s=6)
+    watch.heard(_beat("fusion"), now=0)
+    watch.heard(_beat("radar", sim=True), now=0)
+    assert watch.sim(5)
+    watch.heard(_beat("fusion"), now=8)
+    assert not watch.sim(8)  # the sim radar has gone quiet
+
+
+def test_bits_decode_back_to_states() -> None:
+    names = ["fusion", "recorder", "radar"]
+    watch = Watch(names, down_after_s=6)
+    watch.heard(_beat("fusion", "degraded"), now=0)
+    watch.heard(_beat("radar"), now=0)
+    assert states_from_bits(names, *watch.bits(1)) == watch.states(1)
+
+
+def test_shipped_down_after_allows_for_late_beats() -> None:
+    health = get_config().health
+    assert health.down_after_s > 2 * health.beat_s

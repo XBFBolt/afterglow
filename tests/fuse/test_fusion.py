@@ -358,11 +358,25 @@ def test_fake_scenario_climbs_to_p1() -> None:
     # Confirmed only once heat appears; P1 only once radar says still.
     assert all(t.t >= fake.THERMAL_FROM_S for t in sent if t.priority <= 2)
     assert all(t.t >= fake.RADAR_FROM_S for t in sent if t.priority == 1)
+    # The breathing rate goes out as soon as it is measured, not at the next resend.
     last = sent[-1]
-    assert last.alive and last.hazard == "caution"
+    assert last.alive and last.priority == 1
     assert last.breaths_per_min is not None and 13 <= last.breaths_per_min <= 15
+    assert fake.BREATHING_FROM_S <= last.t < fake.BREATHING_FROM_S + 1
     assert last.bearing_deg is not None
     assert abs(last.bearing_deg - fake.VICTIM_BEARING_DEG) <= 5
+    final = to_target(victim, fake.DURATION_S, CFG)
+    assert final.hazard == "caution" and final.breaths_per_min is not None
+
+
+def test_a_breathing_rate_is_sent_once_when_it_becomes_known() -> None:
+    tracker = _tracker()
+    on_message(tracker, ble(0), 0, CFG)
+    on_message(tracker, thermal(1), 1, CFG)
+    assert on_message(tracker, radar(2), 2, CFG)  # still: P1
+    [news] = on_message(tracker, radar(3, breaths=14), 3, CFG)
+    assert news.priority == 1 and news.breaths_per_min == 14
+    assert on_message(tracker, radar(4, breaths=15), 4, CFG) == []  # not news
 
 
 def test_fake_scenario_in_a_real_search_keeps_the_bystander_at_p4() -> None:

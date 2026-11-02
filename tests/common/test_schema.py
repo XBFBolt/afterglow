@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from common.schema import (
     TOPICS,
     Alert,
+    Beacon,
     BleHit,
     HazardReading,
     Heartbeat,
@@ -47,10 +48,9 @@ SAMPLES: dict[str, Message] = {
         hazard="caution",
         evidence={"rf": 1.0, "thermal": 0.9, "radar": 0.85},
     ),
-    "relay.out": Alert(
-        id=7, p=1, c=92, x=12, y=-4, brg=40, rng=2, alive=True, br=14, hz=1
-    ),
+    "relay.out": Alert(id=7, p=1, c=92, rng=2, alive=True, br=14, hz=1),
     "relay.in": Alert(id=7, p=1, c=92, alive=True),
+    "relay.beacon": Beacon(seq=12, up=0b11, bad=0b10, sim=True),
     "health.beat": Heartbeat(
         status="degraded", sim=False, note="radar: no frames from /dev/ttyAMA0"
     ),
@@ -149,8 +149,10 @@ def test_unknown_topic_is_rejected() -> None:
                 "breaths_per_min": 900,
             },
         ),
-        (Alert, {"id": 1, "p": 1, "c": 90, "alive": True, "y": 3}),  # half a position
+        (Alert, {"id": 1, "p": 1, "c": 90, "alive": True, "brg": 40}),  # not sent
         (Alert, {"v": 2, "id": 1, "p": 1, "c": 90, "alive": True}),  # unknown format
+        (Beacon, {"seq": 1 << 16, "up": 0, "bad": 0, "sim": True}),
+        (Beacon, {"seq": 1, "up": -1, "bad": 0, "sim": True}),
         (Heartbeat, {"status": "dead", "sim": False}),
         (Heartbeat, {"status": "ok", "sim": False, "note": "x" * 65}),
     ],

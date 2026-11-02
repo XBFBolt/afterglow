@@ -25,7 +25,9 @@ priority rises at once but drops only once the lower one has held for
 demote_s, so a flickering sensor can't flip the marker every second.
 
 Send rules: a track's Target is published when the track is new, when its
-priority changes, and every resend_s while it is P1 or P2.
+priority changes, when a breathing rate becomes known (the operator's proof
+of life shouldn't wait for the next resend), and every resend_s while it is
+P1 or P2.
 
 With targets.known_only (demo and testing), devices not in targets.devices
 are ignored, so bystanders' phones neither flood the link nor lend their
@@ -108,14 +110,14 @@ def radar_evidence(hit: RadarHit, cfg: FusionConfig) -> float:
 
 def to_target(track: Track, now: float, cfg: Config) -> Target:
     """The track as a Target at time now, with its priority as scored right
-    now. Bearing, range and breathing rate older than window_s are unknown
-    (None). Movement and hazard are the last measured, so a victim the searcher
-    has left stays as urgent as they were."""
+    now. A bearing older than bearing_s, and a range or breathing rate older
+    than window_s, are unknown (None). Movement and hazard are the last
+    measured, so a victim the searcher has left stays as urgent as they were."""
     window_s = cfg.tracks.window_s
     evidence = Evidence(rf=track.e_rf, thermal=track.e_thermal, radar=track.e_radar)
     c = confidence(evidence, cfg.fusion.weights)
     moving = track.radar.moving if track.radar else None
-    recent_bearing = within(now, track.bearing_t, window_s)
+    recent_bearing = within(now, track.bearing_t, cfg.tracks.bearing_s)
     recent_breaths = within(now, track.breaths_t, window_s)
     return Target(
         t=now,
@@ -148,9 +150,10 @@ def on_message(tracker: Tracker, msg: Message, now: float, cfg: Config) -> list[
     if track is None:
         return []
     target = _refresh(track, now, cfg)
-    if target.priority == track.sent_priority:
-        return []
-    return [_sent(track, target)]
+    news = target.priority != track.sent_priority or (
+        target.breaths_per_min is not None and not track.sent_breathing
+    )
+    return [_sent(track, target)] if news else []
 
 
 def due(tracker: Tracker, now: float, cfg: Config) -> list[Target]:
@@ -208,6 +211,7 @@ def _apply(tracker: Tracker, msg: Message, cfg: Config) -> Track | None:
 def _sent(track: Track, target: Target) -> Target:
     track.sent_priority = target.priority
     track.sent_t = target.t
+    track.sent_breathing = target.breaths_per_min is not None
     return target
 
 

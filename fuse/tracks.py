@@ -9,7 +9,9 @@ Which track a hit joins (windows and limits from config.yaml, tracks section):
    ignored (and counted, so a target that is never heard can be noticed).
 1. A device hit (Wi-Fi, BLE) joins the track that already holds its device hash.
 2. A hit with a bearing joins the track seen at the nearest bearing within
-   bearing_merge_deg, if that bearing is under window_s old.
+   bearing_merge_deg, if that bearing is under bearing_s old. Bearings are
+   relative to the camera, so an older one may have been taken facing
+   another way.
 3. The thermal camera and radar share a bracket and look at one thing at a
    time. Radar gives no bearing but does give range, so a radar hit joins the
    track the radar saw under focus_s ago at the nearest range within
@@ -32,7 +34,8 @@ Which track a hit joins (windows and limits from config.yaml, tracks section):
 Each track keeps the strongest evidence each sensor has given it, so confidence
 never drops because the searcher walked away or looked elsewhere: a person
 confirmed ten minutes ago is still there. Bearing, range and breathing rate go
-stale, so fusion reports them only while under window_s old. "Recent" means
+stale, so fusion reports them only while under bearing_s (bearing) or window_s
+old. "Recent" means
 within that many seconds either way (see within()), so a clock set backwards
 mid-search can't make old readings look fresh.
 
@@ -99,6 +102,7 @@ class Track:
     demote_since: Time | None = None
     sent_priority: Priority | None = None
     sent_t: Time = -math.inf
+    sent_breathing: bool = False  # the last Target sent had a breathing rate
 
     @property
     def alive(self) -> bool:
@@ -255,8 +259,8 @@ class Tracker:
         return next((tr for tr in self.tracks.values() if dev in tr.rf), None)
 
     def _has_bearing(self, track: Track, t: float) -> bool:
-        """Track has a bearing under window_s old."""
-        recent = within(t, track.bearing_t, self.cfg.window_s)
+        """Track has a bearing under bearing_s old."""
+        recent = within(t, track.bearing_t, self.cfg.bearing_s)
         return track.bearing_deg is not None and recent
 
     def _by_bearing(self, bearing: float, t: float) -> Track | None:

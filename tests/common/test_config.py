@@ -37,6 +37,20 @@ def _drop(section: str) -> Callable[[dict], None]:
         _set("fusion.weights.rf", float("nan")),
         _set("targets.devices", ["aa:bb:cc:dd:ee:ff"]),  # raw MAC, not a hash
         _set("bus.node.pub_prot", 5555),  # typo
+        _set("tracks.bearing_s", 60),  # longer than window_s
+        _set("health.down_after_s", 4),  # a late beat would look like a dead module
+        _set("health.node_modules", ["fusion", "fusion"]),
+        _set("health.node_modules", ["m" * n for n in range(1, 18)]),  # 16 bits max
+        _set("relay.max_alert_bytes", 40),  # a beacon wouldn't fit
+        _set("health.node_modules", ["Fusion!"]),
+        _set("relay.link_dead_s", 15),  # one late beacon would read as a dead link
+        _set("relay.retry_max_s", 5),  # below ack_timeout_s
+        _set("relay.sim_loss", 1.5),
+        _set("relay.sim_port", 5550),  # a bus port
+        _set("post.web_port", 5570),  # the sim radio's port
+        _set("post.searcher_lat", 91),
+        _set("tak.url", "239.2.3.1:6969"),  # no scheme
+        _set("tak.send_from", "laptop"),
         _set("log.level", "LOUD"),
         _set("relay.max_alert_bytes", 500),  # over Meshtastic's limit
         _set("bus.host", "0.0.0.0"),  # bus open to the network
