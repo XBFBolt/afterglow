@@ -85,7 +85,8 @@ Get each part talking to software standalone before wrapping it in a module.
 **Comms + map**
 
 - [ ] Two Meshtastic boards flashed, region US, same preset (MediumFast indoors), passing text
-- [ ] ATAK, iTAK or WinTAK shows a test CoT marker (`python -m tools.cot_test`) over home Wi-Fi, then over our own travel router
+- [x] iTAK shows a test CoT marker (`python -m tools.cot_test`) over home Wi-Fi: multicast works with no TAK server, once iOS Settings → Privacy & Security → Local Network → iTAK is on
+- [ ] Same over our own travel router, then the full scenario's victim marker in iTAK (set `tak.send_from` to the laptop's address on the router)
 
 ## Phase 2: real sensor modules
 
