@@ -58,6 +58,8 @@ def _drop(section: str) -> Callable[[dict], None]:
         _set("tracks.state_dir", "logs/state"),  # clearing logs would reset ids
         _set("tracks.state_dir", "logs"),
         _set("tracks.demote_s", 0),
+        _set("tracks.restore_s", 0),
+        _set("tracks.radar_drift_mps", -1),
     ],
 )
 def test_bad_config_fails_at_load(

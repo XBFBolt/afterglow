@@ -99,18 +99,18 @@ Triage:
 
 - P1: C ≥ 0.8 and (radar says not moving, or hazard = danger); unknown movement is not "still"
 - P2: C ≥ 0.8
-- P3: 0.5 ≤ C < 0.8
-- P4: C < 0.5 (logged, sent only when the link is idle)
+- P3: 0.51 ≤ C < 0.8
+- P4: C < 0.51 (logged, sent only when the link is idle). A device alone scores at most 0.5, so `triage.possible` sits just above it: a lone phone is "device only", not a P3 alert
 
 Tracks (full rules in `fuse/tracks.py`):
 
-- With `targets.known_only: true` (demo and testing), fusion ignores every device not in `targets.devices`, so bystanders' phones can't flood the link or lend their signal to a heat pack. Set it false for a real search.
+- With `targets.known_only: true` (demo and testing), fusion ignores every device not in `targets.devices`, so bystanders' phones can't flood the link or lend their signal to a heat pack. Set it false for a real search. Ignored hits are counted, and fusion warns if the target device isn't being heard (a changed salt or a randomized address would otherwise blind the search silently).
 - A device hit joins the track holding its device hash. A hit with a bearing joins a track seen within 20° in the last 30 s.
-- Thermal and radar share a bracket and look at one thing at a time. A radar hit (no bearing) joins the track the radar saw in the last 5 s at a range within 1.5 m; failing that, whatever the camera last saw, if the radar has nothing recent on it. Someone at another range is someone else.
-- When they find someone new, that person joins the device track the searcher was closing in on: heard in the last 30 s, estimated within 8 m, nobody confirmed on it yet, known target devices first, then the strongest signal. Two people never share a marker; a duplicate marker is the lesser evil.
+- Thermal and radar share a bracket and look at one thing at a time. A radar hit (no bearing) joins the track the radar saw in the last 5 s at a range within 1.5 m plus 1 m for each second since (the searcher walks); failing that, whatever the camera last saw, if the radar has nothing recent on it. Someone at another range is someone else.
+- When they find someone new, that person joins the device track the searcher was closing in on: heard in the last 30 s, estimated within 8 m, nobody seen on it yet, known target devices first, then the strongest signal. A person with no device takes that device track whenever they're seen, so someone first seen from too far away still gets their phone. Two people never share a marker; a duplicate marker is the lesser evil.
 - Each sensor's evidence on a track is the strongest it has given, so confidence never drops because the searcher walked away. Bearing, range and breathing rate go stale and become unknown (`None`) after 30 s; the last radar reading still decides "not moving", so a victim left behind stays P1.
 - Priority rises at once but drops only after the lower priority has held for 10 s, so a flickering radar can't flip the marker every second.
-- Track ids never repeat, and confirmed tracks survive a restart or reboot, both saved in `state/` (not `logs/`, so clearing recordings can't reset ids). The command post keys markers by id.
+- Only P1/P2 tracks are kept for good; anything below is forgotten after 10 min unheard, so a crowd doesn't pile up. Track ids never repeat, and P1/P2 tracks seen in the last 15 min survive a restart or reboot, both saved in `state/` (not `logs/`, so clearing recordings can't reset ids). The command post keys markers by id. Run `--new-search` before every search or rehearsal so the last one's victims don't come back.
 
 Fusion publishes `fuse.target` when a track is created, when its priority changes, and every 30 s for P1/P2.
 
@@ -136,6 +136,7 @@ uv run pytest                             # run tests
 uv run ruff check . && uv run ruff format .
 uv run honcho -f Procfile.node start      # start the field node
 uv run honcho -f Procfile.post start      # start the command post
+uv run python -m fuse.fusion --new-search # before each search or rehearsal, node stopped: forget saved tracks
 uv run python -m tools.fake_detections    # play the fake victim scenario
 uv run python -m tools.tap                # print all bus traffic
 uv run python -m tools.replay logs/<run>.jsonl

@@ -211,12 +211,14 @@ def test_devices_per_track_are_bounded() -> None:
     assert list(track.rf) == [OTHER, KNOWN]
 
 
-def test_prune_forgets_device_only_tracks_but_keeps_confirmed_ones() -> None:
+def test_prune_keeps_only_p1_and_p2_for_good() -> None:
     tr = _tracker()
     device_only = tr.add_rf(ble(PHONE, 0, rng=20), 0.2)
-    confirmed = tr.add_thermal(thermal(0, 40), 0.9)
+    seen_once = tr.add_thermal(thermal(0, 40), 0.9)  # P3: someone, once
+    confirmed = tr.add_thermal(thermal(0, 200), 0.9)
+    confirmed.priority = 2  # fusion's call: C >= triage.confirmed
     tr.prune(now=500)
-    assert set(tr.tracks.values()) == {device_only, confirmed}
+    assert set(tr.tracks.values()) == {device_only, seen_once, confirmed}
     tr.prune(now=601)
     assert set(tr.tracks.values()) == {confirmed}
 
@@ -274,9 +276,10 @@ def test_a_known_device_outlasts_strangers_when_tracks_run_out() -> None:
     assert target.id in tr.tracks and stranger.id not in tr.tracks
 
 
-def test_confirmed_tracks_outlast_device_only_ones() -> None:
+def test_confirmed_tracks_outlast_everything_else() -> None:
     tr = _tracker(max_tracks=2)
     person = tr.add_thermal(thermal(0, 40), 0.9)  # oldest
+    person.priority = 1
     target_phone = tr.add_rf(ble(KNOWN, 1, rng=20), 0.1)
     tr.add_rf(ble(PHONE, 2), 0.1)
     assert person.id in tr.tracks and target_phone.id not in tr.tracks
@@ -288,3 +291,42 @@ def test_restored_tracks_move_ids_on_and_respect_max_tracks() -> None:
     tr = Tracker(_cfg(max_tracks=3), known=[KNOWN])
     tr.restore(saved)
     assert len(tr.tracks) == 3 and tr.next_id == 6
+
+
+# Regressions from the second fusion review
+
+
+def test_a_person_first_seen_too_far_off_still_gets_their_phone() -> None:
+    # Probe 2a: heat first seen while the phone still read past
+    # confirm_range_m, and the two tracks never merged.
+    tr = _tracker()
+    phone = tr.add_rf(ble(KNOWN, 0, rng=12), 0.2)
+    person = tr.add_thermal(thermal(0.5, 40), 0.9)
+    assert person is not phone
+    tr.add_rf(ble(KNOWN, 5, rng=5), 0.8)  # the searcher closes in
+    assert tr.add_thermal(thermal(5.5, 40), 0.9) is person
+    assert KNOWN in person.rf and person.e_rf == 0.8
+    assert phone.id not in tr.tracks  # retired, folded into the person
+
+
+def test_a_person_never_takes_a_phone_someone_is_seen_with() -> None:
+    tr = _tracker()
+    victim = tr.add_rf(ble(KNOWN, 0, rng=3), 1.0)
+    assert tr.add_thermal(thermal(1, 40), 0.9) is victim
+    second = tr.add_thermal(thermal(2, 200), 0.9)
+    tr.add_thermal(thermal(3, 200), 0.9)
+    assert second is not victim and not second.rf
+    assert KNOWN in victim.rf
+
+
+def test_radar_follows_a_person_through_a_short_dropout_while_walking_in() -> None:
+    # Probe 2b: a 3 s radar gap at 1 m/s moved the range past radar_merge_m,
+    # and one victim became two P1 markers.
+    tr = _tracker()
+    person = tr.add_thermal(thermal(0, 40), 0.9)
+    tr.add_radar(radar(0.1, rng=6.0), 0.8)
+    for t in (1, 2, 3):
+        tr.add_thermal(thermal(t, 40), 0.9)
+    assert tr.add_radar(radar(3.1, rng=3.0), 0.8) is person
+    # Still someone else: 5 m in one second is no walk.
+    assert tr.add_radar(radar(4.1, rng=8.0), 0.8) is not person

@@ -39,7 +39,7 @@ Fake scenario → fusion → relay queue → LoRa (sim) → receiver → web map
 - [x] `fuse/tracks.py`: merge hits by device hash, or bearing within 20° seen in the last 30 s + tests
 - [x] `fuse/fusion.py`: noisy-OR confidence, P1–P4 triage, send rules (new track, priority change, every 30 s for P1/P2) + tests
 - [ ] Decide the bearing reference before the relay and thermal work: compass bearings (fit the IMU), or camera-relative (merge window down to about `focus_s`, and `brg` not sent over the air, since it means nothing to the operator)
-- [ ] Decide what to do when the victim's own phone reads past `tracks.confirm_range_m` (body loss: a phone under the victim can read 9 m away); today the person and the phone become two markers
+- [x] A person first seen while their phone still reads past `tracks.confirm_range_m` (body loss: a phone under the victim can read 9 m away) takes the phone once it reads closer
 - [ ] Status beacon over LoRa, designed before the codec: modules-up bitmask + sequence number every N s, doubling as the link keepalive, so the post can tell "no victims" from "link dead"; its quiet threshold must allow for beats up to 2 × `health.beat_s` apart
 - [ ] `relay/codec.py`: `Alert` to and from compact bytes, under 100 bytes + tests (a full alert as compact JSON is already 99 bytes with small numbers: drop empty fields or struct-pack)
 - [ ] `relay/priority_queue.py`: priority then age, newer alert replaces queued older one, back-off retry after 10 s without ack, P1 never blocked + tests
@@ -66,6 +66,7 @@ Get each part talking to software standalone before wrapping it in a module.
 
 - [ ] USB Wi-Fi adapter in monitor mode on `wlan1`; scapy logs probe requests on channels 1/6/11
 - [ ] bleak reports RSSI for our test phone and BLE tag
+- [ ] Demo victim device is a BLE tag with a fixed address (phones randomize theirs, and `known_only` would then ignore it): put its hash in `targets.devices` (`uv run python -c "from common.ids import hash_device; print(hash_device('AA:BB:CC:DD:EE:FF'))"`) and check that hash shows up in `uv run python -m tools.tap find.`
 
 **Sensing**
 
@@ -114,6 +115,8 @@ Each behind `--sim`, sim path written first, and never able to crash the node. A
 - [ ] Link drop: unplug the receiver for 30 s, plug it back, queued P1 arrives first
 - [ ] End-to-end latency from detection to marker measured, under 5 s
 - [ ] Replay: `tools/replay.py` reproduces a recorded good run end to end
+- [ ] Every rehearsal and the demo start with `uv run python -m fuse.fusion --new-search` (node stopped), or the last run's P1 comes back if it was under 15 min ago
+- [ ] Walk away from the victim for over 30 s and come back: expect a second P1 marker for the same person (a duplicate beats a hidden victim); rehearse it so it's no surprise in front of the judges
 
 ## If we had more time: security
 

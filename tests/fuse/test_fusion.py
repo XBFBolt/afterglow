@@ -24,10 +24,12 @@ from fuse.fusion import (
     confidence,
     due,
     load_next_id,
+    new_search,
     new_state,
     on_message,
     radar_evidence,
     save_next_id,
+    save_tracks,
     step,
     to_target,
     triage,
@@ -57,7 +59,7 @@ OPEN = _cfg(known_only=False)  # a real search: every device counts
 
 
 def _tracker(cfg: Config = CFG) -> Tracker:
-    return Tracker(cfg.tracks, cfg.targets.devices)
+    return fusion.new_tracker(cfg)
 
 
 def ble(t: float, rssi: float = -55, rng: float = 3.0, dev: str = KNOWN) -> BleHit:
@@ -199,10 +201,12 @@ def test_a_person_never_borrows_a_bystanders_phone() -> None:
     assert STRANGER not in person.rf
 
 
-def test_in_a_real_search_every_device_counts() -> None:
+def test_in_a_real_search_every_device_counts_but_alone_is_only_p4() -> None:
+    # A device alone scores at most 0.5, just under triage.possible: "device
+    # only", so passing phones don't each become a P3 alert.
     tracker = _tracker(OPEN)
-    [target] = _feed(tracker, [ble(0, dev=STRANGER)], OPEN)
-    assert target.priority == 3
+    [target] = _feed(tracker, [ble(0, rssi=-40, dev=STRANGER)], OPEN)
+    assert target.confidence == 0.5 and target.priority == 4
 
 
 # Send rules and priority
@@ -210,8 +214,8 @@ def test_in_a_real_search_every_device_counts() -> None:
 
 def test_send_on_new_track_and_on_priority_change_only() -> None:
     tracker = _tracker()
-    sent = _feed(tracker, [ble(0), ble(1), ble(2)])  # P3, no change
-    assert [t.priority for t in sent] == [3]
+    sent = _feed(tracker, [ble(0), ble(1), ble(2)])  # P4, no change
+    assert [t.priority for t in sent] == [4]
     sent = _feed(tracker, [thermal(3)])  # rf + thermal: confirmed, movement unknown
     assert [t.priority for t in sent] == [2]
     sent = _feed(tracker, [radar(4, moving=False)])
@@ -224,7 +228,7 @@ def test_a_flickering_moving_flag_does_not_flip_priority() -> None:
     for i in range(60):
         msgs += [thermal(1 + i), radar(1 + i, moving=i % 2 == 1)]
     priorities = [t.priority for t in _play(_tracker(), msgs)]
-    assert priorities[:3] == [3, 2, 1]
+    assert priorities[:3] == [4, 2, 1]
     assert set(priorities[3:]) == {1}  # resends only
     assert len(priorities) <= 3 + 60 // CFG.tracks.resend_s
 
@@ -328,10 +332,14 @@ def test_range_falls_back_to_the_rough_rf_estimate() -> None:
 # The fake scenario, end to end through fusion's logic
 
 
-def _scenario(cfg: Config) -> tuple[Tracker, list[Target]]:
-    tracker = _tracker(cfg)
+def _scenario(
+    cfg: Config, tracker: Tracker | None = None, start: float = 0.0
+) -> tuple[Tracker, list[Target]]:
+    """Play the fake scenario through fusion's logic, starting at `start`."""
+    tracker = tracker or _tracker(cfg)
     sent: list[Target] = []
     for _, msg in fake.script(random.Random(7)):
+        msg = msg.model_copy(update={"t": start + msg.t})
         sent += on_message(tracker, msg, msg.t, cfg) + due(tracker, msg.t, cfg)
         tracker.prune(msg.t)
     return tracker, sent
@@ -427,7 +435,7 @@ def test_step_publishes_a_fresh_hit_and_drops_a_misstamped_one(
         ],
     )
     [target] = pub.targets()
-    assert target.priority == 3
+    assert target.priority == 4
     # The first is reported at once, naming its source; the next waits for the
     # summary, so a flood can't flood the log.
     [warning] = [r.getMessage() for r in caplog.records if r.name == "fuse.fusion"]
@@ -436,9 +444,12 @@ def test_step_publishes_a_fresh_hit_and_drops_a_misstamped_one(
 
 
 def test_track_ids_never_repeat_across_restarts(tmp_path: Path) -> None:
-    cfg = _cfg(tmp_path)
+    cfg = _cfg(tmp_path, known_only=False)
     first = new_state(cfg)
-    used = [first.tracker.add_rf(ble(0, dev=f"{i:016x}"), 0.1).id for i in range(250)]
+    used = [first.tracker.next_id]
+    for i in range(250):
+        first.tracker.add_rf(ble(0, dev=f"{i:016x}"), 0.1)
+        used.append(first.tracker.next_id - 1)
     fusion._reserve_ids(first)
     second = new_state(cfg)  # a restart, or a power cut at this moment
     assert second.tracker.next_id > max(used)
@@ -526,3 +537,124 @@ def test_a_crash_in_the_loop_keeps_tracks_and_ids(
     assert len(ids) == 2 and len(set(ids)) == 2
     assert len(state.tracker.tracks) == 2  # the first track survived the crash
     assert any(isinstance(m, Heartbeat) for p in pubs for _, m in p.sent)
+
+
+# Regressions from the second fusion review
+
+
+def _save(state: fusion.State) -> None:
+    save_tracks(state.tracks_file, state.tracker)
+    fusion._reserve_ids(state)
+
+
+def test_last_nights_rehearsal_does_not_come_back(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Probe 1: a saved P1 from an earlier run was resent at startup, took this
+    # run's phone, and this run's victim became a second P1 with no phone.
+    caplog.set_level("INFO")
+    cfg = _cfg(tmp_path)
+    night = new_state(cfg)
+    _scenario(cfg, night.tracker, start=time.time() - 12 * 3600)
+    _save(night)
+    today = new_state(cfg)
+    assert today.tracker.tracks == {}
+    assert "left 1 saved track(s) seen over restore_s ago" in caplog.text
+    tracker, sent = _scenario(cfg, today.tracker, start=time.time())
+    assert sent[0].priority == 4 and sent[-1].priority == 1
+    assert len(tracker.tracks) == 1 and sent[0].id >= night.tracker.next_id
+
+
+def test_a_reboot_mid_search_keeps_its_victims_and_says_how_old(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("INFO")
+    cfg = _cfg(tmp_path)
+    before = new_state(cfg)
+    _scenario(cfg, before.tracker, start=time.time() - 180)
+    _save(before)
+    [track] = new_state(cfg).tracker.tracks.values()
+    assert track.priority == 1
+    assert f"restored track {track.id} (P1), last seen" in caplog.text
+
+
+def test_new_search_forgets_a_recent_rehearsal_but_never_reuses_its_ids(
+    tmp_path: Path,
+) -> None:
+    cfg = _cfg(tmp_path)
+    rehearsal = new_state(cfg)
+    _, first = _scenario(cfg, rehearsal.tracker, start=time.time() - 300)
+    _save(rehearsal)
+    new_search(cfg)
+    demo = new_state(cfg)
+    assert demo.tracker.tracks == {}
+    _, second = _scenario(cfg, demo.tracker, start=time.time())
+    assert second[0].priority == 4 and second[-1].priority == 1
+    assert {t.id for t in first}.isdisjoint(t.id for t in second)
+
+
+def test_one_fusion_at_a_time_and_new_search_waits_for_it_to_stop(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Found in the live check: an orphaned fusion kept resending the
+    # rehearsal's P1 after --new-search, and two fusions would share one id
+    # counter.
+    cfg = _cfg(tmp_path)
+    running = fusion.hold_lock(cfg)
+    assert running is not None
+    assert fusion.hold_lock(cfg) is None  # a second fusion won't start
+    assert new_search(cfg) is False
+    assert "stop the node" in caplog.text
+    running.close()  # the node stops
+    assert new_search(cfg) is True
+
+
+def test_a_crowd_does_not_pile_up_or_come_back(tmp_path: Path) -> None:
+    # Probe 3: ten minutes through a crowd left 99 tracks kept for good and
+    # saved for the next start, because "seen once" counted as confirmed.
+    cfg = _cfg(tmp_path, known_only=False)
+    state = new_state(cfg)
+    rng = random.Random(1)
+    start = time.time() - 1300
+    msgs: list[Message] = []
+    for i in range(300):  # 10 min; someone in frame 30% of the time, no phones
+        t = start + 2 * i
+        if rng.random() < 0.3:
+            msgs.append(thermal(t, bearing=rng.uniform(0, 359)))
+            if rng.random() < 0.5:
+                msgs.append(radar(t + 0.1, moving=True, range_m=rng.uniform(1, 8)))
+    _play(state.tracker, msgs, cfg)
+    created = state.tracker.next_id - 1
+    state.tracker.prune(msgs[-1].t + cfg.tracks.keep_s + 1)
+    kept = list(state.tracker.tracks.values())
+    assert len(kept) < created
+    assert all(track.confirmed for track in kept)  # only P1/P2 stay for good
+    _save(state)
+    restored = new_state(cfg).tracker.tracks
+    assert {tr.id for tr in kept} >= set(restored)
+
+
+def test_known_only_warns_when_the_target_device_is_never_heard(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Review: a hash that no longer matches (changed salt, randomized address)
+    # blinded the device search without a word.
+    state = new_state(_cfg(tmp_path))
+    now = time.time()
+    _steps(state, [ble(now, dev=STRANGER), ble(now, dev="c" * 16)])
+    [warning] = [r for r in caplog.records if r.name == "fuse.fusion"]
+    assert warning.levelname == "WARNING"
+    assert "ignored 1 hit(s)" in warning.getMessage()
+    assert "target device heard never" in warning.getMessage()
+
+
+def test_known_only_reports_quietly_while_the_target_is_heard(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("INFO")
+    state = new_state(_cfg(tmp_path))
+    now = time.time()
+    _steps(state, [ble(now), ble(now, dev=STRANGER)])
+    [record] = [r for r in caplog.records if "ignored" in r.getMessage()]
+    assert record.levelname == "INFO"
+    assert "target heard 0 s ago" in record.getMessage()

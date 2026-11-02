@@ -161,6 +161,7 @@ class TracksConfig(Section):
     window_s: PositiveFloat
     focus_s: PositiveFloat
     radar_merge_m: PositiveFloat
+    radar_drift_mps: float = Field(ge=0)
     confirm_range_m: PositiveFloat
     keep_s: PositiveFloat
     max_tracks: int = Field(gt=0)
@@ -168,6 +169,7 @@ class TracksConfig(Section):
     demote_s: PositiveFloat
     resend_s: PositiveFloat
     state_dir: str
+    restore_s: PositiveFloat
 
     @model_validator(mode="after")
     def _ordered(self) -> Self:

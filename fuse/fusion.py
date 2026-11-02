@@ -35,12 +35,15 @@ Run with: python -m fuse.fusion
 """
 
 import argparse
+import fcntl
 import logging
 import math
 import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TextIO
 
 from pydantic import TypeAdapter
 
@@ -56,18 +59,19 @@ from common.config import (
 )
 from common.health import Heart
 from common.schema import (
+    BleHit,
     Evidence,
     Hazard,
     HazardReading,
     Message,
     RadarHit,
-    RfHit,
     Target,
     ThermalHit,
+    WifiHit,
 )
 from common.service import run_forever
 from find.rssi_filter import e_rf
-from fuse.tracks import Track, Tracker, within
+from fuse.tracks import CONFIRMED, Track, Tracker, within
 
 log = logging.getLogger(__name__)
 
@@ -155,7 +159,7 @@ def due(tracker: Tracker, now: float, cfg: Config) -> list[Target]:
     counts either way, so a clock set backwards can't stall them."""
     out = []
     for track in tracker.tracks.values():
-        resend = track.priority <= 2 and abs(now - track.sent_t) >= cfg.tracks.resend_s
+        resend = track.confirmed and abs(now - track.sent_t) >= cfg.tracks.resend_s
         if not resend and track.demote_since is None:
             continue
         target = _refresh(track, now, cfg)
@@ -179,15 +183,18 @@ def _refresh(track: Track, now: float, cfg: Config) -> Target:
     return target.model_copy(update={"priority": track.priority})
 
 
+def new_tracker(cfg: Config, next_id: int = 1) -> Tracker:
+    return Tracker(
+        cfg.tracks, cfg.targets.devices, next_id, known_only=cfg.targets.known_only
+    )
+
+
 def _apply(tracker: Tracker, msg: Message, cfg: Config) -> Track | None:
-    """Hand a message to the tracker. With targets.known_only, a device not in
-    targets.devices is ignored. A thermal hit with no person or a radar hit
-    with nobody present is not evidence of absence (the sensors may just be
-    pointed elsewhere), so it is skipped."""
+    """Hand a message to the tracker. A thermal hit with no person or a radar
+    hit with nobody present is not evidence of absence (the sensors may just
+    be pointed elsewhere), so it is skipped."""
     match msg:
-        case RfHit():
-            if cfg.targets.known_only and msg.dev not in tracker.known:
-                return None
+        case WifiHit() | BleHit():
             return tracker.add_rf(msg, e_rf(msg.rssi_smooth, cfg.rf))
         case ThermalHit(person=True):
             return tracker.add_thermal(msg, msg.conf)
@@ -274,8 +281,8 @@ def load_tracks(path: Path) -> list[Track]:
 
 
 def save_tracks(path: Path, tracker: Tracker) -> None:
-    """Save every confirmed track. Logs a failure instead of raising."""
-    confirmed = [track for track in tracker.tracks.values() if track.alive]
+    """Save every P1/P2 track. Logs a failure instead of raising."""
+    confirmed = [track for track in tracker.tracks.values() if track.confirmed]
     try:
         _write_atomic(path, TRACKS_JSON.dump_json(confirmed))
     except OSError as exc:
@@ -297,22 +304,74 @@ class State:
     skewed: int = 0  # messages dropped for a bad timestamp, not yet reported
     skewed_src: str = ""
     reported_evicted: int = 0
+    reported_ignored: int = 0
     last_report: float = -math.inf  # monotonic
 
 
-def new_state(cfg: Config) -> State:
-    """Fusion's state, picking up the saved ids and confirmed tracks."""
+def _state_files(cfg: Config) -> tuple[Path, Path]:
+    """(next track id file, saved tracks file)."""
     folder = REPO_ROOT / cfg.tracks.state_dir
-    id_file = folder / "next_track_id"
-    state = State(
-        cfg,
-        Tracker(cfg.tracks, cfg.targets.devices, load_next_id(id_file)),
-        id_file=id_file,
-        tracks_file=folder / "tracks.json",
-    )
-    state.tracker.restore(load_tracks(state.tracks_file))
+    return folder / "next_track_id", folder / "tracks.json"
+
+
+def new_state(cfg: Config) -> State:
+    """Fusion's state, picking up the saved ids and the P1/P2 tracks seen in
+    the last restore_s: a reboot mid-search keeps its victims, but last
+    night's rehearsal doesn't come back."""
+    id_file, tracks_file = _state_files(cfg)
+    state = State(cfg, new_tracker(cfg, load_next_id(id_file)), id_file, tracks_file)
+    now = time.time()
+    saved = load_tracks(tracks_file)
+    recent = [tr for tr in saved if within(now, tr.last_t, cfg.tracks.restore_s)]
+    for track in recent:
+        log.info(
+            "restored track %d (P%d), last seen %.0f s ago",
+            track.id,
+            track.priority,
+            now - track.last_t,
+        )
+    if len(recent) < len(saved):
+        log.info(
+            "left %d saved track(s) seen over restore_s ago", len(saved) - len(recent)
+        )
+    state.tracker.restore(recent)
     _reserve_ids(state)
     return state
+
+
+def hold_lock(cfg: Config) -> TextIO | None:
+    """Lock tracks.state_dir for this process; None if a running fusion holds
+    it. Two fusions would hand out the same track ids, and a --new-search beside
+    a running fusion would be undone by its next save. The OS drops the lock
+    when the process ends, however it ends, so it can never go stale."""
+    path = REPO_ROOT / cfg.tracks.state_dir / "fusion.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = path.open("w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock.close()
+        return None
+    return lock
+
+
+def new_search(cfg: Config) -> bool:
+    """Forget saved tracks before a new search or rehearsal, keeping the id
+    counter so no marker id is ever reused. Refuses (False) while fusion runs."""
+    lock = hold_lock(cfg)
+    if lock is None:
+        log.error("fusion is still running: stop the node, then run --new-search")
+        return False
+    with lock:
+        id_file, tracks_file = _state_files(cfg)
+        count = len(load_tracks(tracks_file))
+        tracks_file.unlink(missing_ok=True)
+        log.info(
+            "forgot %d saved track(s); track ids carry on from %d",
+            count,
+            load_next_id(id_file),
+        )
+    return True
 
 
 def _reserve_ids(state: State) -> None:
@@ -339,20 +398,22 @@ def step(sub: Subscriber, pub: Publisher, state: State) -> None:
     targets += due(state.tracker, now, cfg)
     state.tracker.prune(now)
     _reserve_ids(state)  # before publishing, so no published id goes unsaved
-    if any(target.alive for target in targets):  # a confirmed track changed
+    if any(target.priority <= CONFIRMED for target in targets):
         save_tracks(state.tracks_file, state.tracker)
     for target in targets:
         pub.publish("fuse.target", target)
-    _report(state)
+    _report(state, now)
 
 
-def _report(state: State) -> None:
+def _report(state: State, now: float) -> None:
     """Summarize repeated problems at most once per bus.bad_msg_log_s, with counts."""
-    evicted = state.tracker.evicted - state.reported_evicted
-    now = time.monotonic()
-    if not (state.skewed or evicted):
+    tracker = state.tracker
+    evicted = tracker.evicted - state.reported_evicted
+    ignored = tracker.ignored - state.reported_ignored
+    mono = time.monotonic()
+    if not (state.skewed or evicted or ignored):
         return
-    if now - state.last_report < state.cfg.bus.bad_msg_log_s:
+    if mono - state.last_report < state.cfg.bus.bad_msg_log_s:
         return
     if state.skewed:
         log.warning(
@@ -363,9 +424,32 @@ def _report(state: State) -> None:
         )
     if evicted:
         log.warning("max_tracks reached: dropped %d least urgent track(s)", evicted)
+    if ignored:
+        _report_ignored(ignored, now - tracker.target_heard_t, state.cfg)
     state.skewed = 0
-    state.reported_evicted = state.tracker.evicted
-    state.last_report = now
+    state.reported_evicted = tracker.evicted
+    state.reported_ignored = tracker.ignored
+    state.last_report = mono
+
+
+def _report_ignored(ignored: int, heard_ago_s: float, cfg: Config) -> None:
+    """known_only drops every other device silently, so a target hash that no
+    longer matches (changed salt, a phone randomizing its address) would blind
+    the search without a word. Say how long since the target was heard."""
+    if heard_ago_s <= cfg.tracks.window_s:
+        log.info(
+            "ignored %d hit(s) from non-target devices; target heard %.0f s ago",
+            ignored,
+            heard_ago_s,
+        )
+        return
+    heard = "never" if math.isinf(heard_ago_s) else f"not for {heard_ago_s:.0f} s"
+    log.warning(
+        "ignored %d hit(s) from non-target devices, and target device heard %s: "
+        "check targets.devices against tools.tap (salt changed? address randomized?)",
+        ignored,
+        heard,
+    )
 
 
 def run(state: State) -> None:
@@ -379,11 +463,25 @@ def run(state: State) -> None:
 
 
 def main() -> None:
-    argparse.ArgumentParser(description="Fuse sensor hits into targets.").parse_args()
+    parser = argparse.ArgumentParser(description="Fuse sensor hits into targets.")
+    parser.add_argument(
+        "--new-search",
+        action="store_true",
+        help="forget saved tracks (keeping the id counter) and exit; "
+        "run with the node stopped, before each search or rehearsal",
+    )
+    args = parser.parse_args()
     setup_logging()
-    state = new_state(get_config())
+    cfg = get_config()
+    if args.new_search:
+        sys.exit(0 if new_search(cfg) else 1)
+    lock = hold_lock(cfg)  # held for the life of the process
+    if lock is None:
+        log.error("another fusion is already running on this node; not starting")
+        sys.exit(1)
+    state = new_state(cfg)
     log.info(
-        "fusion up; %d confirmed track(s) restored; next track id %d",
+        "fusion up; %d track(s) restored; next track id %d",
         len(state.tracker.tracks),
         state.tracker.next_id,
     )

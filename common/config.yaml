@@ -55,22 +55,24 @@ fusion:
 
 triage:
   confirmed: 0.8         # C at or above: P1 or P2
-  possible: 0.5          # C at or above: P3; below: P4
+  possible: 0.51         # C at or above: P3; below: P4. Just over 0.5, the most a device alone can score, so a lone phone is P4 ("device only")
 
 tracks:
   bearing_merge_deg: 20  # merge hits whose bearings are this close...
   window_s: 30           # ...and were seen within this window; older bearings and ranges are unknown
   focus_s: 5             # thermal/radar hits this recent mean the searcher is at that track
-  radar_merge_m: 1.5     # a radar hit joins a track only if this close to its last radar range
+  radar_merge_m: 1.5     # a radar hit joins a track only if this close to its last radar range,
+  radar_drift_mps: 1.0   # plus this much per second since that reading (the searcher walks)
   confirm_range_m: 8     # a newly confirmed person joins a device estimated this close
-  keep_s: 600            # forget a device-only track after this long unheard (confirmed tracks stay)
-  max_tracks: 256        # when full, unconfirmed tracks without a known device go first
+  keep_s: 600            # forget a track below P2 after this long unheard (P1/P2 tracks stay)
+  max_tracks: 256        # when full, tracks below P2 without a known device go first
   max_devs: 16           # device hashes remembered per track
   demote_s: 10           # priority rises at once, but drops only after the lower one holds this long
   resend_s: 30           # resend P1/P2 alerts this often; must be under tak.stale_s
-  # Track ids and confirmed tracks survive restarts here. Not under logs/, so
+  # Track ids and P1/P2 tracks survive restarts here. Not under logs/, so
   # clearing recordings can't reset ids and overwrite markers at the command post.
   state_dir: state
+  restore_s: 900         # at startup, take back P1/P2 tracks seen this recently: a reboot, not last night's rehearsal
 
 health:
   beat_s: 2              # every long-running module publishes a heartbeat this often
