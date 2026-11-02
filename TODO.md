@@ -85,7 +85,7 @@ Get each part talking to software standalone before wrapping it in a module.
 **Comms + map**
 
 - [ ] Two Meshtastic boards flashed, region US, same preset (MediumFast indoors), passing text
-- [ ] ATAK or WinTAK shows a test CoT marker over our own travel router
+- [ ] ATAK, iTAK or WinTAK shows a test CoT marker (`python -m tools.cot_test`) over home Wi-Fi, then over our own travel router
 
 ## Phase 2: real sensor modules
 

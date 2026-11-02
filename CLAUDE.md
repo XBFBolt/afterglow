@@ -44,7 +44,8 @@ relay/         lora_tx.py (field), lora_rx.py (command post), priority_queue.py,
                radio.py (sim radio; the Meshtastic board goes behind the same interface)
 map/           board.py (what the command post knows), cot_sender.py (TAK),
                web/ (standard-library server + one page with nothing loaded from outside)
-tools/         replay.py, fake_detections.py, calibrate_rssi.py, tap.py (print bus traffic)
+tools/         replay.py, fake_detections.py, calibrate_rssi.py, tap.py (print bus traffic),
+               cot_test.py (one test marker to TAK)
 tests/         mirrors the package layout
 Procfile.node  starts every field process
 Procfile.post  starts receiver, web map and TAK output on the laptop
@@ -150,6 +151,7 @@ uv run python -m tools.fake_detections    # play the fake victim scenario
 uv run python -m tools.tap                # print all bus traffic
 uv run python -m tools.replay logs/<run>.jsonl
 uv run python -m relay.radio down         # sim only: cut the LoRa link (up restores it)
+uv run python -m tools.cot_test --lat <lat> --lon <lon>   # send one test marker to TAK
 ```
 
 The web map is at http://127.0.0.1:8080/ once `Procfile.post` is running.
