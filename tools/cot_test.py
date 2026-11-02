@@ -8,18 +8,24 @@ Sends one marker, "AFTERGLOW TEST", at that spot every 2 s for 2 minutes
 network (found automatically; --from picks one). --to sends straight to one
 device instead, e.g. --to 192.168.1.42:4242. The data is fake, but CoT isn't
 encrypted: use your own Wi-Fi, never a public one.
+
+Unlike a real victim, the test marker goes stale after STALE_S, and a delete
+is sent when the test ends, so it doesn't linger on the map.
 """
 
 import argparse
 import socket
 import time
+import uuid
+import xml.etree.ElementTree as ET
 
 from pydantic import ValidationError
 
 from common.config import Config, PostConfig, TakConfig, get_config
-from map.cot_sender import VICTIM_TYPE, cot_event, open_socket
+from map.cot_sender import UNKNOWN, VICTIM_TYPE, cot_event, open_socket, stamp
 
 PERIOD_S = 2.0
+STALE_S = 10.0
 UID = "AG-test"
 
 
@@ -37,7 +43,8 @@ def marker_config(cfg: Config, lat: float, lon: float, to: str, frm: str) -> Con
     any of them is invalid."""
     try:
         tak = TakConfig.model_validate(
-            cfg.tak.model_dump() | {"url": f"udp://{to}", "send_from": frm}
+            cfg.tak.model_dump()
+            | {"url": f"udp://{to}", "send_from": frm, "stale_s": STALE_S}
         )
         post = PostConfig.model_validate(
             cfg.post.model_dump() | {"searcher_lat": lat, "searcher_lon": lon}
@@ -45,6 +52,25 @@ def marker_config(cfg: Config, lat: float, lon: float, to: str, frm: str) -> Con
     except ValidationError as exc:
         raise ValueError(str(exc)) from None
     return cfg.model_copy(update={"tak": tak, "post": post})
+
+
+def delete_event(uid: str, now: float) -> bytes:
+    """TAK's "delete this item" message for uid."""
+    event = ET.Element(
+        "event",
+        version="2.0",
+        uid=str(uuid.uuid4()),
+        type="t-x-d-d",
+        how="h-g-i-g-o",
+        time=stamp(now),
+        start=stamp(now),
+        stale=stamp(now + STALE_S),
+    )
+    ET.SubElement(event, "point", lat="0", lon="0", hae=UNKNOWN, ce=UNKNOWN, le=UNKNOWN)
+    detail = ET.SubElement(event, "detail")
+    ET.SubElement(detail, "link", uid=uid, relation="none", type="none")
+    ET.SubElement(detail, "__forcedelete")
+    return ET.tostring(event, encoding="utf-8", xml_declaration=True)
 
 
 def main() -> None:
@@ -84,8 +110,12 @@ def main() -> None:
                 print(f"\nsend failed: {exc}", flush=True)
             time.sleep(PERIOD_S)
     finally:
+        try:
+            sock.sendto(delete_event(UID, time.time()), dest)
+        except OSError:
+            pass  # it goes stale after STALE_S anyway
         sock.close()
-        print("\ndone")
+        print("\ndone; the marker is deleted, or fades within 10 s")
 
 
 if __name__ == "__main__":

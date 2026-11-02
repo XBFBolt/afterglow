@@ -47,6 +47,7 @@ Fake scenario → fusion → relay queue → LoRa (sim) → receiver → web map
 - [x] `relay/priority_queue.py`: priority then age, newer alert replaces queued older one, back-off retry after 10 s without ack, P1 never blocked + tests
 - [x] `relay/lora_tx.py` and `relay/lora_rx.py` with a sim radio (`relay/radio.py`, UDP on loopback) that can drop and restore the link (`python -m relay.radio down|up`)
 - [x] `map/web/`: standard-library server and one page with nothing loaded from outside (the post has no internet; Flask and Leaflet dropped): P1-first list colored by priority, vitals, hazard, "heard N s ago", link and module status, a loud banner when the map server stops answering
+- [x] Web map: each victim's history (P4 → P3 → P2 → P1, first breathing rate, with times) and text that scales up on a projector
 - [ ] Web map: a floor-plan view with the searcher and markers, and the searcher's position settable by clicking it instead of fixed in config
 - [x] `map/cot_sender.py`: CoT over UDP (standard library, no pytak), `uid` = `AG-<track id>`, stale after 2 min, searcher as a friendly marker; untested against a real TAK client
 - [x] `tools/replay.py`: replays a `.jsonl` run's sensor messages through the live pipeline

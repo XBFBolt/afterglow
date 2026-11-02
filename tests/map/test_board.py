@@ -86,3 +86,27 @@ def test_snapshot_is_plain_json() -> None:
     board.heard(_alert(1, 1, br=12, hz=2, rng=3), 0, 0)
     board.heard(_beacon(0), 0, 0)
     assert json.loads(json.dumps(board.snapshot(1)))["victims"][0]["hz"] == "danger"
+
+
+def test_history_shows_the_climb_and_first_breath() -> None:
+    board = Board(CFG)
+    for now, (p, br) in enumerate(
+        [(4, None), (4, None), (3, None), (1, None), (1, 14)]
+    ):
+        board.heard(_alert(7, p, br=br), now, now)
+    board.heard(_alert(7, 1, br=15), 5, 5)  # same priority, breathing already known
+    steps = board.snapshot(6)["victims"][0]["history"]
+    assert [(s["p"], s["br"]) for s in steps] == [
+        (4, None),
+        (3, None),
+        (1, None),
+        (1, 14),
+    ]
+
+
+def test_history_is_bounded_but_keeps_where_it_started() -> None:
+    board = Board(CFG)
+    for now in range(30):
+        board.heard(_alert(7, 1 + now % 2), now, now)
+    steps = board.snapshot(30)["victims"][0]["history"]
+    assert len(steps) == 10 and steps[0]["p"] == 1  # the first, at time 0

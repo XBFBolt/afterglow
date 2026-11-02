@@ -37,7 +37,7 @@ SEARCHER_TYPE = "a-f-G-U-C"  # friendly ground unit
 LABEL = {1: "URGENT", 2: "CONFIRMED", 3: "POSSIBLE", 4: "DEVICE ONLY"}
 
 
-def _stamp(t: float) -> str:
+def stamp(t: float) -> str:
     """CoT time, e.g. 2026-11-07T22:00:00.000Z."""
     iso = datetime.fromtimestamp(t, UTC).isoformat(timespec="milliseconds")
     return iso.replace("+00:00", "Z")
@@ -59,9 +59,9 @@ def cot_event(
         uid=uid,
         type=kind,
         how="h-e",  # position estimated, not measured
-        time=_stamp(now),
-        start=_stamp(now),
-        stale=_stamp(now + cfg.tak.stale_s),
+        time=stamp(now),
+        start=stamp(now),
+        stale=stamp(now + cfg.tak.stale_s),
     )
     ET.SubElement(
         event,
