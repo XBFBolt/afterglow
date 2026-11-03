@@ -49,12 +49,13 @@ Fake scenario → fusion → relay queue → LoRa (sim) → receiver → web map
 - [x] `map/web/`: standard-library server and one page with nothing loaded from outside (the post has no internet; Flask and Leaflet dropped): P1-first list colored by priority, vitals, hazard, "heard N s ago", link and module status, a loud banner when the map server stops answering
 - [x] Web map: each victim's history (P4 → P3 → P2 → P1, first breathing rate, with times) and text that scales up on a projector
 - [ ] Web map: a floor-plan view with the searcher and markers, and the searcher's position settable by clicking it instead of fixed in config
+- [ ] Web map: visual polish (works and reads well, but plain)
 - [x] `map/cot_sender.py`: CoT over UDP (standard library, no pytak), `uid` = `AG-<track id>`, stale after 2 min, searcher as a friendly marker; untested against a real TAK client
 - [x] `tools/replay.py`: replays a `.jsonl` run's sensor messages through the live pipeline
 - [x] `Heartbeat` model on `health.beat` and the `common.health.Heart` helper; fusion beats
 - [x] Health: recorder (degraded when disk is low), relay, receiver, map and TAK output publish heartbeats; the map flags any module or link that has gone quiet. Each sensor module adds its own in Phase 2, and its name to `health.node_modules`
 - [x] Integration test: fake scenario ends with a P1 alert received at the command post; after a link drop the queued P1 arrives first (`tests/relay/test_end_to_end.py`)
-- [ ] Milestone: `honcho` starts node and post on one laptop and the full scenario plays out on the web map (runs, and `/state` shows the P1 and a link drop; still needs a look in a browser)
+- [x] Milestone: `honcho` starts node and post on one laptop and the full scenario plays out on the web map (seen in a browser Nov 2: P1 at 94%, breathing 13/min, climb P4 → P1 shown, all modules ok, no beacons lost)
 - [ ] Phase 1 review against the engineering standard, then fixes
 
 ## Hardware bring-up
